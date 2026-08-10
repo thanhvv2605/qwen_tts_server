@@ -60,7 +60,7 @@ batch đó nhận lỗi 500 — không retry tách lẻ từng item ở v1.
 | File | Trách nhiệm |
 |---|---|
 | `app/config.py` | Settings qua env vars: `MODEL_ID` (mặc định `Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign`), `DEVICE` (mặc định `cuda:0`), `HOST` (`0.0.0.0`), `PORT` (`8000`), `MIN_FREE_VRAM_GB` (`6`), `BATCH_WINDOW_MS` (`150`), `MAX_BATCH_SIZE` (`4`), `MAX_NEW_TOKENS` (`2048`), `REQUEST_TIMEOUT_S` (`120`) |
-| `app/schemas.py` | Pydantic `TTSRequest` (text: str, language: str = "Auto", instruct: str) với validation; error response model |
+| `app/schemas.py` | Pydantic `TTSRequest` (text: str, language: str = "Auto", instruct: str) với validation |
 | `app/model.py` | `TTSModelService`: kiểm tra VRAM + load singleton `Qwen3TTSModel` lúc startup; hàm `generate_batch(items: list[TTSRequest]) -> list[bytes]` chạy blocking call trong threadpool |
 | `app/batcher.py` | `BatchWorker`: `asyncio.Queue` + 1 background task duy nhất, gom request theo window/max-size rồi gọi `TTSModelService.generate_batch`, phân phối kết quả về từng `asyncio.Future` |
 | `app/main.py` | FastAPI app + lifespan (load model, start/stop batch worker) + endpoints |
