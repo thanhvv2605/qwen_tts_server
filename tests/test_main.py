@@ -1,3 +1,4 @@
+import asyncio
 import io
 
 import numpy as np
@@ -69,3 +70,32 @@ def test_health_endpoint(client):
     assert body["model_loaded"] is True
     assert body["vram_free_gb"] == 20.0
     assert body["queue_depth"] == 0
+
+
+def test_voice_design_returns_500_on_generation_error(client, monkeypatch):
+    async def failing_generate_fn(requests):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(main_module.batch_worker, "_generate_fn", failing_generate_fn)
+
+    resp = client.post(
+        "/v1/tts/voice-design",
+        json={"text": "hello", "language": "English", "instruct": "calm voice"},
+    )
+    assert resp.status_code == 500
+    assert "boom" in resp.json()["detail"]
+
+
+def test_voice_design_returns_504_on_timeout(client, monkeypatch):
+    async def slow_generate_fn(requests):
+        await asyncio.sleep(0.3)
+        return [_fake_wav_bytes() for _ in requests]
+
+    monkeypatch.setattr(main_module.batch_worker, "_generate_fn", slow_generate_fn)
+    monkeypatch.setattr(main_module.settings, "request_timeout_s", 0.02)
+
+    resp = client.post(
+        "/v1/tts/voice-design",
+        json={"text": "hello", "language": "English", "instruct": "calm voice"},
+    )
+    assert resp.status_code == 504
