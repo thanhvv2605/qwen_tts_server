@@ -102,3 +102,68 @@ async def test_batch_error_propagates_to_all_pending_futures():
             await task_b
     finally:
         await worker.stop()
+
+
+async def test_start_twice_raises():
+    async def fake_generate(requests):
+        return [b"x" for _ in requests]
+
+    worker = BatchWorker(generate_fn=fake_generate, window_ms=50, max_batch_size=4)
+    worker.start()
+    try:
+        with pytest.raises(RuntimeError):
+            worker.start()
+    finally:
+        await worker.stop()
+
+
+async def test_stop_fails_pending_requests_instead_of_hanging():
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_generate(requests):
+        started.set()
+        await release.wait()
+        return [b"x" for _ in requests]
+
+    worker = BatchWorker(generate_fn=slow_generate, window_ms=200, max_batch_size=4)
+    worker.start()
+
+    in_flight = asyncio.create_task(worker.submit(_req("in-flight")))
+    await started.wait()
+    queued = asyncio.create_task(worker.submit(_req("queued")))
+    await asyncio.sleep(0.01)  # let "queued" land in the queue behind the in-flight batch
+
+    await worker.stop()
+
+    with pytest.raises(RuntimeError, match="worker stopped"):
+        await in_flight
+    with pytest.raises(RuntimeError, match="worker stopped"):
+        await queued
+
+
+async def test_mismatched_result_length_fails_batch_without_killing_worker():
+    async def bad_generate(requests):
+        return [b"x"]  # wrong length for a batch of 2
+
+    worker = BatchWorker(generate_fn=bad_generate, window_ms=100, max_batch_size=4)
+    worker.start()
+    try:
+        task_a = asyncio.create_task(worker.submit(_req("a")))
+        await asyncio.sleep(0.01)
+        task_b = asyncio.create_task(worker.submit(_req("b")))
+
+        with pytest.raises(ValueError):
+            await task_a
+        with pytest.raises(ValueError):
+            await task_b
+
+        # worker must still be alive for subsequent requests
+        async def good_generate(requests):
+            return [b"ok" for _ in requests]
+
+        worker._generate_fn = good_generate
+        result = await worker.submit(_req("c"))
+        assert result == b"ok"
+    finally:
+        await worker.stop()

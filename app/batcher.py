@@ -24,6 +24,7 @@ class BatchWorker:
         self._max_batch_size = max_batch_size
         self._queue: "asyncio.Queue[_QueueItem]" = asyncio.Queue()
         self._task: asyncio.Task | None = None
+        self._current_batch: list[_QueueItem] = []
 
     async def submit(self, request: TTSRequest) -> bytes:
         future: "asyncio.Future[bytes]" = asyncio.get_running_loop().create_future()
@@ -31,6 +32,8 @@ class BatchWorker:
         return await future
 
     def start(self) -> None:
+        if self._task is not None and not self._task.done():
+            raise RuntimeError("BatchWorker is already running")
         self._task = asyncio.create_task(self._run())
 
     async def stop(self) -> None:
@@ -40,14 +43,27 @@ class BatchWorker:
                 await self._task
             except asyncio.CancelledError:
                 pass
+            self._task = None
+        self._fail_pending(RuntimeError("worker stopped"))
 
     def queue_depth(self) -> int:
-        return self._queue.qsize()
+        return self._queue.qsize() + len(self._current_batch)
+
+    def _fail_pending(self, exc: Exception) -> None:
+        for item in self._current_batch:
+            if not item.future.done():
+                item.future.set_exception(exc)
+        self._current_batch = []
+        while not self._queue.empty():
+            item = self._queue.get_nowait()
+            if not item.future.done():
+                item.future.set_exception(exc)
 
     async def _run(self) -> None:
         while True:
             item = await self._queue.get()
             batch = [item]
+            self._current_batch = batch
             deadline = time.monotonic() + self._window_s
             while len(batch) < self._max_batch_size:
                 remaining = deadline - time.monotonic()
@@ -59,11 +75,16 @@ class BatchWorker:
                     break
                 batch.append(next_item)
             await self._dispatch(batch)
+            self._current_batch = []
 
     async def _dispatch(self, batch: list[_QueueItem]) -> None:
         requests = [i.request for i in batch]
         try:
             results = await self._generate_fn(requests)
+            if len(results) != len(batch):
+                raise ValueError(
+                    f"generate_fn returned {len(results)} result(s) for a batch of {len(batch)}"
+                )
         except Exception as exc:  # noqa: BLE001 - propagate to callers via their Future
             logger.exception("Batch of %d request(s) failed", len(batch))
             for i in batch:
