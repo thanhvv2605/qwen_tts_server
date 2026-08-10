@@ -85,7 +85,7 @@ Request JSON:
 Response: `audio/wav` binary (200) hoặc:
 - `422` — input không hợp lệ (text/instruct rỗng, language không hỗ trợ)
 - `504` — hết thời gian chờ trong hàng đợi (> `REQUEST_TIMEOUT_S`)
-- `500` — lỗi khi sinh audio, body `{"error": "..."}`
+- `500` — lỗi khi sinh audio, body `{"detail": "..."}` (chuẩn FastAPI `HTTPException`)
 
 ### `GET /health`
 
@@ -121,7 +121,7 @@ Endpoint nhận request → validate Pydantic → tạo `asyncio.Future` → đ�
   vời, không âm thầm fallback sang CPU).
 - **Batch lỗi**: exception khi `generate_batch` → set exception cho toàn
   bộ Future đang chờ trong batch đó; log traceback kèm text (rút gọn) để
-  debug. Client nhận `500 {"error": ...}`.
+  debug. Client nhận `500 {"detail": "..."}`.
 - **Timeout hàng đợi**: quá `REQUEST_TIMEOUT_S` chưa được xử lý → hủy chờ,
   trả `504`.
 

@@ -2,7 +2,7 @@ import asyncio
 
 import pytest
 
-from app.batcher import BatchWorker
+from app.batcher import BatchWorker, _QueueItem
 from app.schemas import TTSRequest
 
 
@@ -167,3 +167,26 @@ async def test_mismatched_result_length_fails_batch_without_killing_worker():
         assert result == b"ok"
     finally:
         await worker.stop()
+
+
+async def test_already_done_item_is_skipped_without_wasting_a_batch_slot():
+    calls = []
+
+    async def fake_generate(requests):
+        calls.append([r.text for r in requests])
+        return [b"x" for _ in requests]
+
+    worker = BatchWorker(generate_fn=fake_generate, window_ms=50, max_batch_size=2)
+
+    dead_future = asyncio.get_event_loop().create_future()
+    dead_future.cancel()
+    worker._queue.put_nowait(_QueueItem(_req("dead"), dead_future))
+
+    worker.start()
+    try:
+        result = await worker.submit(_req("alive"))
+    finally:
+        await worker.stop()
+
+    assert result == b"x"
+    assert all("dead" not in batch for batch in calls)

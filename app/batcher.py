@@ -62,6 +62,8 @@ class BatchWorker:
     async def _run(self) -> None:
         while True:
             item = await self._queue.get()
+            if item.future.done():
+                continue
             batch = [item]
             self._current_batch = batch
             deadline = time.monotonic() + self._window_s
@@ -73,6 +75,8 @@ class BatchWorker:
                     next_item = await asyncio.wait_for(self._queue.get(), timeout=remaining)
                 except asyncio.TimeoutError:
                     break
+                if next_item.future.done():
+                    continue
                 batch.append(next_item)
             await self._dispatch(batch)
             self._current_batch = []

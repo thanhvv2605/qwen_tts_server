@@ -10,11 +10,27 @@ conda activate qwen3-tts
 pip install -r requirements.txt
 ```
 
+Requires an NVIDIA GPU with CUDA. The first run downloads the ~4.3GB
+`Qwen3-TTS-12Hz-1.7B-VoiceDesign` model from HuggingFace — if the server
+seems to hang at startup, that's most likely why; use `python
+scripts/smoke_test.py` once `/health` reports `model_loaded: true`, not
+before.
+
 ## Run
 
+Either of these works; explicit `uvicorn` CLI flags always win over `QWEN_TTS_HOST`/`QWEN_TTS_PORT`:
+
 ```bash
+# CLI flags (ignores QWEN_TTS_HOST / QWEN_TTS_PORT)
 uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+# module entrypoint (honors QWEN_TTS_HOST / QWEN_TTS_PORT from the environment)
+python -m app.main
 ```
+
+The server is unauthenticated and binds `0.0.0.0` by default — keep it behind a
+firewall or bind `QWEN_TTS_HOST=127.0.0.1` unless you specifically want it
+reachable from other machines.
 
 ## Endpoints
 
@@ -29,7 +45,7 @@ Request body:
 }
 ```
 - `language` one of: Auto, Chinese, English, Japanese, Korean, German, French, Russian, Portuguese, Spanish, Italian
-- Response: `audio/wav` binary (200), or `422` (invalid input), `504` (queue timeout), `500` (generation error)
+- Response: `audio/wav` binary (200), or `422` (invalid input), `504` (queue timeout), `500` (generation error) — errors return `{"detail": "..."}`
 
 ### `GET /health`
 
@@ -40,7 +56,7 @@ Returns `{"status", "model_loaded", "vram_free_gb", "queue_depth"}`.
 All settings are environment variables prefixed `QWEN_TTS_` (see `app/config.py` for defaults), e.g.:
 
 ```bash
-export QWEN_TTS_PORT=8080
+export QWEN_TTS_PORT=8080          # only takes effect with `python -m app.main` — see Run above
 export QWEN_TTS_MAX_BATCH_SIZE=8
 export QWEN_TTS_MODEL_ID=./models/Qwen3-TTS-12Hz-1.7B-VoiceDesign  # use a local path to skip re-downloading
 ```

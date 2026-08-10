@@ -49,10 +49,19 @@ async def voice_design(request: TTSRequest) -> Response:
 async def health() -> dict:
     vram_free_gb = None
     if model_service.is_loaded():
-        vram_free_gb = model_module.check_vram(settings.device, settings.min_free_vram_gb)
+        loop = asyncio.get_running_loop()
+        vram_free_gb = await loop.run_in_executor(
+            None, model_module.check_vram, settings.device, settings.min_free_vram_gb
+        )
     return {
         "status": "ok",
         "model_loaded": model_service.is_loaded(),
         "vram_free_gb": vram_free_gb,
         "queue_depth": batch_worker.queue_depth(),
     }
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(app, host=settings.host, port=settings.port)
