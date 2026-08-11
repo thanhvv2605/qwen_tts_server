@@ -33,6 +33,8 @@ def client(results_dir):
     # real server runs (lifespan started once per process).
     mp = pytest.MonkeyPatch()
     mp.setattr(main_module.settings, "results_dir", str(results_dir))
+    voices_dir = results_dir.parent / "voices"
+    mp.setattr(main_module.settings, "voices_dir", str(voices_dir))
     mp.setattr(main_module.model_service, "load", lambda: None)
     mp.setattr(main_module.model_service, "is_loaded", lambda: True)
     mp.setattr("app.model.check_vram", lambda device, min_free_gb: 20.0)
