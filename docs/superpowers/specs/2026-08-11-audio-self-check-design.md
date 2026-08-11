@@ -86,6 +86,11 @@ Regenerating relies on the model's normal sampling (`do_sample`, the
 default) to plausibly produce a different, hopefully-complete result on
 retry — no new model parameters are needed for this.
 
+A retry call that itself fails (raises, or returns a wav list shorter
+than the pending subset it was asked to regenerate) fails only the
+still-pending items it was called for — siblings whose good results are
+already recorded are unaffected.
+
 ### 3. `BatchWorker` contract change (`app/batcher.py`)
 
 `GenerateFn`'s return type changes from `list[bytes]` to
@@ -137,6 +142,7 @@ shape (`app/main.py:42-44` already catches any exception from
 |---|---|---|
 | `max_plausible_words_per_second` | `float` | `4.5` |
 | `audio_self_check_max_retries` | `int` | `2` |
+| `audio_self_check_enabled` | `bool` | `true` |
 
 ## Data flow (updated)
 
@@ -189,3 +195,14 @@ BatchWorker collects batch → TTSModelService._generate_batch_sync:
   identity + numeric speed control; sentence-level timestamps) — each is
   its own separate design/plan cycle per the agreed priority order
   (self-check → fixed voice/speed → timestamps).
+- Language-specific accuracy of the word-count heuristic. It counts
+  whitespace-separated tokens, so for Vietnamese it effectively counts
+  syllables rather than words (typical measured rate is ~3.1 syllables/sec
+  against the 4.5 threshold — only ~1.4x headroom, thinner than the
+  English case this feature was designed around; watch the new
+  `self-check flagged` logs before trusting the default in production).
+  It is effectively inert for Chinese/Japanese/Korean, which have no
+  whitespace between words, so `word_count` collapses to ~1 regardless of
+  actual sentence length.
+- Per-language threshold recalibration — deferred pending production log
+  data from the new observability counters/log lines.

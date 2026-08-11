@@ -135,7 +135,7 @@ class _ControllableModel:
         return wavs, 24000
 
 
-async def test_generate_batch_regenerates_abnormal_item_and_keeps_siblings():
+async def test_generate_batch_regenerates_abnormal_item_and_keeps_siblings(caplog):
     settings = Settings(_env_file=None)
     service = TTSModelService(settings)
     model = _RecoversOnRetryModel()
@@ -146,13 +146,19 @@ async def test_generate_batch_regenerates_abnormal_item_and_keeps_siblings():
         TTSRequest(text="flaky", language="English", instruct="calm voice"),
     ]
 
-    results = await service.generate_batch(requests)
+    with caplog.at_level(logging.INFO):
+        results = await service.generate_batch(requests)
 
     assert len(results) == 2
     assert isinstance(results[0], bytes)
     assert isinstance(results[1], bytes)
     # First call: whole batch. Second call: only the still-abnormal subset ("flaky").
     assert model.call_texts == [("good one", "flaky"), ("flaky",)]
+
+    assert service.self_check_flagged == 1
+    assert service.self_check_recovered == 1
+    assert service.self_check_exhausted == 0
+    assert "self-check" in caplog.text
 
 
 async def test_generate_batch_returns_exception_for_item_that_never_recovers():
@@ -175,6 +181,12 @@ async def test_generate_batch_returns_exception_for_item_that_never_recovers():
     for call in model.call_texts[1:]:
         assert call == ("always broken",)
 
+    assert service.self_check_flagged == 1
+    assert service.self_check_recovered == 0
+    assert service.self_check_exhausted == 1
+    # Spec-compliant message: duration/word-count diagnostics only, no leaked user text.
+    assert "always broken" not in str(results[1])
+
 
 class _ShortResultModel:
     def generate_voice_design(self, text, language, instruct, max_new_tokens=None):
@@ -195,6 +207,69 @@ async def test_generate_batch_raises_on_short_wavs_list():
 
     with pytest.raises(ValueError, match="wav"):
         await service.generate_batch(requests)
+
+
+async def test_generate_batch_skips_self_check_when_disabled():
+    settings = Settings(_env_file=None, audio_self_check_enabled=False)
+    service = TTSModelService(settings)
+    model = _ControllableModel(always_bad_texts=frozenset({"always broken"}))
+    service._model = model
+
+    requests = [
+        TTSRequest(text="good one", language="English", instruct="calm voice"),
+        TTSRequest(text="always broken", language="English", instruct="calm voice"),
+    ]
+
+    results = await service.generate_batch(requests)
+
+    assert len(results) == 2
+    assert isinstance(results[0], bytes)
+    assert isinstance(results[1], bytes)
+    # No retries: exactly one call to the model, no self-check at all.
+    assert len(model.call_texts) == 1
+    assert service.self_check_flagged == 0
+    assert service.self_check_recovered == 0
+    assert service.self_check_exhausted == 0
+
+
+class _RetryRaisesModel:
+    """First call: one good item, one truncated item. Second call (the
+    retry, for the truncated item only) raises."""
+
+    def __init__(self):
+        self.call_texts: list[tuple[str, ...]] = []
+
+    def generate_voice_design(self, text, language, instruct, max_new_tokens=None):
+        self.call_texts.append(tuple(text))
+        if len(self.call_texts) == 1:
+            wavs = []
+            for t in text:
+                if t == "flaky":
+                    wavs.append(np.zeros(1, dtype="float32"))
+                else:
+                    word_count = len(t.split())
+                    wavs.append(np.zeros(max(int(word_count / 2.5 * 24000), 1), dtype="float32"))
+            return wavs, 24000
+        raise RuntimeError("gpu hiccup")
+
+
+async def test_generate_batch_isolates_retry_call_failure_to_pending_items():
+    settings = Settings(_env_file=None)
+    service = TTSModelService(settings)
+    model = _RetryRaisesModel()
+    service._model = model
+
+    requests = [
+        TTSRequest(text="good one", language="English", instruct="calm voice"),
+        TTSRequest(text="flaky", language="English", instruct="calm voice"),
+    ]
+
+    results = await service.generate_batch(requests)
+
+    assert isinstance(results[0], bytes)
+    assert isinstance(results[1], RuntimeError)
+    assert str(results[1]) == "gpu hiccup"
+    assert model.call_texts == [("good one", "flaky"), ("flaky",)]
 
 
 def test_is_loaded_false_before_load():

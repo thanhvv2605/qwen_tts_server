@@ -64,6 +64,12 @@ class TTSModelService:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
         self._model = None
+        # Single-threaded executor usage (all generate calls are serialized
+        # through the batch worker's executor) means these plain ints need
+        # no lock.
+        self.self_check_flagged = 0
+        self.self_check_recovered = 0
+        self.self_check_exhausted = 0
 
     def load(self) -> None:
         check_vram(self._settings.device, self._settings.min_free_vram_gb)
@@ -99,39 +105,82 @@ class TTSModelService:
                 f"generate_voice_design returned {len(wavs)} wav(s) for {len(requests)} request(s)"
             )
 
+        if not self._settings.audio_self_check_enabled:
+            return [_wav_to_bytes(wav, sr) for wav in wavs]
+
         max_wps = self._settings.max_plausible_words_per_second
         results: list[bytes | Exception | None] = [None] * len(requests)
-        pending = [
-            i
-            for i, wav in enumerate(wavs)
-            if is_audio_abnormal(wav, sr, texts[i], max_wps)
-        ]
+        last_durations: dict[int, float] = {}
+        pending: list[int] = []
         for i, wav in enumerate(wavs):
-            if i not in pending:
+            last_durations[i] = len(wav) / sr
+            if is_audio_abnormal(wav, sr, texts[i], max_wps):
+                pending.append(i)
+            else:
                 results[i] = _wav_to_bytes(wav, sr)
+
+        if pending:
+            self.self_check_flagged += len(pending)
+            for i in pending:
+                word_count = len(texts[i].split())
+                actual_s = last_durations[i]
+                actual_wps = word_count / actual_s if actual_s > 0 else float("inf")
+                logger.info(
+                    "audio self-check flagged item: %d words in %.2fs (%.1f words/sec, threshold %.1f)",
+                    word_count,
+                    actual_s,
+                    actual_wps,
+                    max_wps,
+                )
 
         for _attempt in range(self._settings.audio_self_check_max_retries):
             if not pending:
                 break
-            retry_wavs, retry_sr = self._model.generate_voice_design(
-                text=[texts[i] for i in pending],
-                language=[languages[i] for i in pending],
-                instruct=[instructs[i] for i in pending],
-                max_new_tokens=self._settings.max_new_tokens,
-            )
+            try:
+                retry_wavs, retry_sr = self._model.generate_voice_design(
+                    text=[texts[i] for i in pending],
+                    language=[languages[i] for i in pending],
+                    instruct=[instructs[i] for i in pending],
+                    max_new_tokens=self._settings.max_new_tokens,
+                )
+                if len(retry_wavs) != len(pending):
+                    raise ValueError(
+                        f"generate_voice_design returned {len(retry_wavs)} wav(s) "
+                        f"for {len(pending)} retry request(s)"
+                    )
+            except Exception as exc:  # noqa: BLE001 - isolate retry failure to pending items only
+                logger.exception("audio self-check retry failed for %d item(s)", len(pending))
+                for i in pending:
+                    results[i] = exc
+                pending = []
+                break
+
             still_pending = []
             for pos, i in enumerate(pending):
                 wav = retry_wavs[pos]
+                last_durations[i] = len(wav) / retry_sr
                 if is_audio_abnormal(wav, retry_sr, texts[i], max_wps):
                     still_pending.append(i)
                 else:
                     results[i] = _wav_to_bytes(wav, retry_sr)
+                    self.self_check_recovered += 1
+                    logger.info("audio self-check recovered item on retry %d", _attempt + 1)
             pending = still_pending
 
-        for i in pending:
-            results[i] = RuntimeError(
-                f"audio self-check failed after {self._settings.audio_self_check_max_retries} "
-                f"retries for text {texts[i]!r}"
+        if pending:
+            self.self_check_exhausted += len(pending)
+            logger.warning(
+                "audio self-check exhausted %d retries for %d item(s)",
+                self._settings.audio_self_check_max_retries,
+                len(pending),
             )
+            for i in pending:
+                word_count = len(texts[i].split())
+                expected_min_s = word_count / max_wps
+                results[i] = RuntimeError(
+                    f"audio self-check failed after {self._settings.audio_self_check_max_retries} "
+                    f"retries: got {last_durations[i]:.2f}s for {word_count} words "
+                    f"(expected >= {expected_min_s:.2f}s)"
+                )
 
         return results  # type: ignore[return-value]

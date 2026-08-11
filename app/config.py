@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     request_timeout_s: float = 120.0
     max_plausible_words_per_second: float = 4.5
     audio_self_check_max_retries: int = 2
+    audio_self_check_enabled: bool = True
 
 
 settings = Settings()
