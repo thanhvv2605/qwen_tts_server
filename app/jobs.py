@@ -109,8 +109,23 @@ class JobManager:
                     await job.task
                 except asyncio.CancelledError:
                     pass
+                except Exception:  # noqa: BLE001 - a dead runner must not abort shutdown
+                    logger.exception("job %s runner died with unexpected error", job.job_id)
 
     async def _run_job(self, job: Job) -> None:
+        try:
+            await self._run_job_inner(job)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - runner must always leave the job terminal
+            logger.exception("job %s runner crashed", job.job_id)
+            for item in job.items:
+                if item.status in (ItemStatus.PENDING, ItemStatus.RUNNING):
+                    item.status = ItemStatus.FAILED
+                    item.error = f"job runner crashed: {str(exc) or type(exc).__name__}"
+            job.status = JobStatus.COMPLETED_WITH_ERRORS
+
+    async def _run_job_inner(self, job: Job) -> None:
         job.status = JobStatus.RUNNING
         semaphore = asyncio.Semaphore(self._settings.max_batch_size)
 
@@ -132,7 +147,7 @@ class JobManager:
                 except Exception as exc:  # noqa: BLE001 - per-item failure, job continues
                     logger.warning("job %s item %d failed: %s", job.job_id, index, exc)
                     item.status = ItemStatus.FAILED
-                    item.error = str(exc)
+                    item.error = str(exc) or type(exc).__name__
                 else:
                     item.status = ItemStatus.DONE
 
