@@ -65,7 +65,12 @@ def test_wav_to_bytes_roundtrip():
 
 class _FakeModel:
     def generate_voice_design(self, text, language, instruct, max_new_tokens=None):
-        wavs = [np.zeros(2400, dtype="float32") for _ in text]
+        # Duration well above the self-check threshold (2.5 words/sec is
+        # slower than the 4.5 words/sec threshold, so this never trips
+        # the self-check regardless of input text length).
+        wavs = [
+            np.zeros(max(int(len(t.split()) / 2.5 * 24000), 1), dtype="float32") for t in text
+        ]
         return wavs, 24000
 
 
@@ -85,6 +90,90 @@ async def test_generate_batch_wires_requests_to_model():
     for wav_bytes in results:
         data, sr = sf.read(io.BytesIO(wav_bytes))
         assert sr == 24000
+
+
+class _RecoversOnRetryModel:
+    """The text "flaky" returns a truncated wav on its first appearance across
+    all calls, then a normal-duration wav on every later call. Other texts
+    always return a normal-duration wav. Records every call's text tuple."""
+
+    def __init__(self):
+        self.call_texts: list[tuple[str, ...]] = []
+        self._seen_once: set[str] = set()
+
+    def generate_voice_design(self, text, language, instruct, max_new_tokens=None):
+        self.call_texts.append(tuple(text))
+        wavs = []
+        for t in text:
+            if t == "flaky" and t not in self._seen_once:
+                self._seen_once.add(t)
+                wavs.append(np.zeros(1, dtype="float32"))
+            else:
+                word_count = len(t.split())
+                wavs.append(np.zeros(max(int(word_count / 2.5 * 24000), 1), dtype="float32"))
+        return wavs, 24000
+
+
+class _ControllableModel:
+    """Texts in `always_bad_texts` return a truncated wav on every call,
+    forever. Other texts always return a normal-duration wav. Records every
+    call's text tuple."""
+
+    def __init__(self, always_bad_texts: frozenset[str] = frozenset()):
+        self._always_bad_texts = always_bad_texts
+        self.call_texts: list[tuple[str, ...]] = []
+
+    def generate_voice_design(self, text, language, instruct, max_new_tokens=None):
+        self.call_texts.append(tuple(text))
+        wavs = []
+        for t in text:
+            if t in self._always_bad_texts:
+                wavs.append(np.zeros(1, dtype="float32"))
+            else:
+                word_count = len(t.split())
+                wavs.append(np.zeros(max(int(word_count / 2.5 * 24000), 1), dtype="float32"))
+        return wavs, 24000
+
+
+async def test_generate_batch_regenerates_abnormal_item_and_keeps_siblings():
+    settings = Settings(_env_file=None)
+    service = TTSModelService(settings)
+    model = _RecoversOnRetryModel()
+    service._model = model
+
+    requests = [
+        TTSRequest(text="good one", language="English", instruct="calm voice"),
+        TTSRequest(text="flaky", language="English", instruct="calm voice"),
+    ]
+
+    results = await service.generate_batch(requests)
+
+    assert len(results) == 2
+    assert isinstance(results[0], bytes)
+    assert isinstance(results[1], bytes)
+    # First call: whole batch. Second call: only the still-abnormal subset ("flaky").
+    assert model.call_texts == [("good one", "flaky"), ("flaky",)]
+
+
+async def test_generate_batch_returns_exception_for_item_that_never_recovers():
+    settings = Settings(_env_file=None)
+    service = TTSModelService(settings)
+    model = _ControllableModel(always_bad_texts=frozenset({"always broken"}))
+    service._model = model
+
+    requests = [
+        TTSRequest(text="good one", language="English", instruct="calm voice"),
+        TTSRequest(text="always broken", language="English", instruct="calm voice"),
+    ]
+
+    results = await service.generate_batch(requests)
+
+    assert isinstance(results[0], bytes)
+    assert isinstance(results[1], Exception)
+    # 1 initial call + settings.audio_self_check_max_retries (2 by default) retries.
+    assert len(model.call_texts) == 1 + settings.audio_self_check_max_retries
+    for call in model.call_texts[1:]:
+        assert call == ("always broken",)
 
 
 def test_is_loaded_false_before_load():

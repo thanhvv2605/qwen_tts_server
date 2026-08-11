@@ -78,15 +78,55 @@ class TTSModelService:
     def is_loaded(self) -> bool:
         return self._model is not None
 
-    async def generate_batch(self, requests: Sequence[TTSRequest]) -> list[bytes]:
+    async def generate_batch(self, requests: Sequence[TTSRequest]) -> list[bytes | Exception]:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, self._generate_batch_sync, list(requests))
 
-    def _generate_batch_sync(self, requests: list[TTSRequest]) -> list[bytes]:
+    def _generate_batch_sync(self, requests: list[TTSRequest]) -> list[bytes | Exception]:
+        texts = [r.text for r in requests]
+        languages = [r.language for r in requests]
+        instructs = [r.instruct for r in requests]
+
         wavs, sr = self._model.generate_voice_design(
-            text=[r.text for r in requests],
-            language=[r.language for r in requests],
-            instruct=[r.instruct for r in requests],
+            text=texts,
+            language=languages,
+            instruct=instructs,
             max_new_tokens=self._settings.max_new_tokens,
         )
-        return [_wav_to_bytes(wav, sr) for wav in wavs]
+
+        max_wps = self._settings.max_plausible_words_per_second
+        results: list[bytes | Exception | None] = [None] * len(requests)
+        pending = [
+            i
+            for i, wav in enumerate(wavs)
+            if is_audio_abnormal(wav, sr, texts[i], max_wps)
+        ]
+        for i, wav in enumerate(wavs):
+            if i not in pending:
+                results[i] = _wav_to_bytes(wav, sr)
+
+        for _attempt in range(self._settings.audio_self_check_max_retries):
+            if not pending:
+                break
+            retry_wavs, retry_sr = self._model.generate_voice_design(
+                text=[texts[i] for i in pending],
+                language=[languages[i] for i in pending],
+                instruct=[instructs[i] for i in pending],
+                max_new_tokens=self._settings.max_new_tokens,
+            )
+            still_pending = []
+            for pos, i in enumerate(pending):
+                wav = retry_wavs[pos]
+                if is_audio_abnormal(wav, retry_sr, texts[i], max_wps):
+                    still_pending.append(i)
+                else:
+                    results[i] = _wav_to_bytes(wav, retry_sr)
+            pending = still_pending
+
+        for i in pending:
+            results[i] = RuntimeError(
+                f"audio self-check failed after {self._settings.audio_self_check_max_retries} "
+                f"retries for text {texts[i]!r}"
+            )
+
+        return results  # type: ignore[return-value]
