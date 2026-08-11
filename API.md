@@ -124,11 +124,23 @@ curl -X POST http://127.0.0.1:8000/v1/tts/voice-design \
 
 #### `500 Internal Server Error` — lỗi khi sinh audio
 
-Xảy ra khi model/batch worker gặp lỗi trong lúc generate (ví dụ lỗi nội bộ của model).
+Xảy ra khi model/batch worker gặp lỗi trong lúc generate (ví dụ lỗi nội bộ
+của model), hoặc khi **audio self-check** thất bại: server tự phát hiện
+audio sinh ra ngắn bất thường so với độ dài text (audio bị cụt), tự sinh
+lại tối đa `QWEN_TTS_AUDIO_SELF_CHECK_MAX_RETRIES` (mặc định 2) lần, và
+chỉ trả `500` nếu vẫn không đạt. Client nên coi lỗi này là **retryable**
+(gửi lại request).
 
 ```json
 {
   "detail": "<thông báo lỗi cụ thể>"
+}
+```
+
+Ví dụ message khi self-check thất bại:
+```json
+{
+  "detail": "audio self-check failed after 2 retries: got 0.33s for 35 words (expected >= 7.78s)"
 }
 ```
 
