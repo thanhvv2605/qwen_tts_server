@@ -195,7 +195,7 @@ class _ShortResultModel:
         return wavs, 24000
 
 
-async def test_generate_batch_raises_on_short_wavs_list():
+async def test_generate_batch_short_wavs_list_fails_all_items():
     settings = Settings(_env_file=None)
     service = TTSModelService(settings)
     service._model = _ShortResultModel()
@@ -205,8 +205,9 @@ async def test_generate_batch_raises_on_short_wavs_list():
         TTSRequest(text="world", language="English", instruct="calm voice"),
     ]
 
-    with pytest.raises(ValueError, match="wav"):
-        await service.generate_batch(requests)
+    results = await service.generate_batch(requests)
+    assert all(isinstance(r, ValueError) for r in results)
+    assert "wav" in str(results[0])
 
 
 async def test_generate_batch_skips_self_check_when_disabled():
@@ -276,3 +277,138 @@ def test_is_loaded_false_before_load():
     settings = Settings(_env_file=None)
     service = TTSModelService(settings)
     assert service.is_loaded() is False
+
+
+class _FakeCloneModel:
+    """Fake Base model: records prompt-build and clone calls."""
+
+    def __init__(self):
+        self.prompt_builds: list[str] = []
+        self.clone_calls: list[tuple[tuple[str, ...], object]] = []
+
+    def create_voice_clone_prompt(self, ref_audio, ref_text, x_vector_only_mode=False):
+        self.prompt_builds.append(ref_text)
+        return {"prompt_for": ref_text}
+
+    def generate_voice_clone(self, text, language, voice_clone_prompt, max_new_tokens=None):
+        self.clone_calls.append((tuple(text), voice_clone_prompt))
+        wavs = [
+            np.zeros(max(int(len(t.split()) / 2.5 * 24000), 1), dtype="float32") for t in text
+        ]
+        return wavs, 24000
+
+
+class _FakeRegistry:
+    def __init__(self, voices: dict):
+        self._voices = voices
+
+    def get(self, voice_id):
+        return self._voices.get(voice_id)
+
+
+class _FakeVoiceInfo:
+    def __init__(self, ref_text: str):
+        self.ref_text = ref_text
+        self.wav_path = f"/fake/{ref_text}.wav"
+
+
+async def test_mixed_batch_splits_design_and_clone_preserving_order():
+    settings = Settings(_env_file=None)
+    registry = _FakeRegistry({"voice_a": _FakeVoiceInfo("ref a")})
+    service = TTSModelService(settings, registry)
+    design_model = _FakeModel()
+    clone_model = _FakeCloneModel()
+    service._model = design_model
+    service._clone_model = clone_model
+
+    requests = [
+        TTSRequest(text="design one", language="English", instruct="calm voice"),
+        TTSRequest(text="clone one", language="English", voice_id="voice_a"),
+        TTSRequest(text="design two", language="English", instruct="calm voice"),
+        TTSRequest(text="clone two", language="English", voice_id="voice_a"),
+    ]
+
+    results = await service.generate_batch(requests)
+
+    assert all(isinstance(r, bytes) for r in results)
+    # one clone call for the whole voice_a group, with the cached prompt
+    assert clone_model.clone_calls == [
+        (("clone one", "clone two"), {"prompt_for": "ref a"})
+    ]
+    # prompt built exactly once, then cached
+    assert clone_model.prompt_builds == ["ref a"]
+    await service.generate_batch([requests[1]])
+    assert clone_model.prompt_builds == ["ref a"]
+
+
+async def test_unknown_voice_id_fails_only_its_items():
+    settings = Settings(_env_file=None)
+    registry = _FakeRegistry({})
+    service = TTSModelService(settings, registry)
+    service._model = _FakeModel()
+    service._clone_model = _FakeCloneModel()
+
+    requests = [
+        TTSRequest(text="design item", language="English", instruct="calm voice"),
+        TTSRequest(text="clone item", language="English", voice_id="ghost"),
+    ]
+
+    results = await service.generate_batch(requests)
+    assert isinstance(results[0], bytes)
+    assert isinstance(results[1], Exception)
+    assert "unknown voice_id" in str(results[1])
+
+
+async def test_clone_disabled_fails_clone_items_only():
+    settings = Settings(_env_file=None, voice_clone_enabled=False)
+    service = TTSModelService(settings, _FakeRegistry({}))
+    service._model = _FakeModel()
+
+    requests = [
+        TTSRequest(text="design item", language="English", instruct="calm voice"),
+        TTSRequest(text="clone item", language="English", voice_id="any"),
+    ]
+
+    results = await service.generate_batch(requests)
+    assert isinstance(results[0], bytes)
+    assert isinstance(results[1], Exception)
+    assert "voice cloning is disabled" in str(results[1])
+
+
+async def test_clone_path_goes_through_self_check():
+    class _TruncatingCloneModel(_FakeCloneModel):
+        def __init__(self):
+            super().__init__()
+            self.calls = 0
+
+        def generate_voice_clone(self, text, language, voice_clone_prompt, max_new_tokens=None):
+            self.calls += 1
+            if self.calls == 1:
+                return [np.zeros(1, dtype="float32") for _ in text], 24000
+            return super().generate_voice_clone(text, language, voice_clone_prompt, max_new_tokens)
+
+    settings = Settings(_env_file=None)
+    registry = _FakeRegistry({"voice_a": _FakeVoiceInfo("ref a")})
+    service = TTSModelService(settings, registry)
+    service._model = _FakeModel()
+    truncating = _TruncatingCloneModel()
+    service._clone_model = truncating
+
+    results = await service.generate_batch(
+        [TTSRequest(text="some words here", language="English", voice_id="voice_a")]
+    )
+    assert isinstance(results[0], bytes)
+    assert truncating.calls == 2  # initial + 1 self-check retry
+    assert service.self_check_recovered == 1
+
+
+def test_clone_is_loaded_and_invalidate():
+    settings = Settings(_env_file=None)
+    service = TTSModelService(settings)
+    assert service.clone_is_loaded() is False
+    service._clone_model = _FakeCloneModel()
+    assert service.clone_is_loaded() is True
+    service._clone_prompts["v"] = object()
+    service.invalidate_clone_prompt("v")
+    assert "v" not in service._clone_prompts
+    service.invalidate_clone_prompt("never-there")  # no raise

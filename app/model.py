@@ -61,9 +61,12 @@ def is_audio_abnormal(
 
 
 class TTSModelService:
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, voice_registry=None) -> None:
         self._settings = settings
+        self._voices = voice_registry
         self._model = None
+        self._clone_model = None
+        self._clone_prompts: dict[str, object] = {}
         # Safe without a lock only because BatchWorker's single consumer
         # awaits one _dispatch at a time, so generate_batch never runs
         # concurrently with itself. A second concurrent caller would race
@@ -81,50 +84,130 @@ class TTSModelService:
             device_map=self._settings.device,
             dtype=torch.bfloat16,
         )
+        if self._settings.voice_clone_enabled:
+            self._clone_model = Qwen3TTSModel.from_pretrained(
+                self._settings.clone_model_id,
+                device_map=self._settings.device,
+                dtype=torch.bfloat16,
+            )
 
     def is_loaded(self) -> bool:
         return self._model is not None
+
+    def clone_is_loaded(self) -> bool:
+        return self._clone_model is not None
+
+    def invalidate_clone_prompt(self, voice_id: str) -> None:
+        self._clone_prompts.pop(voice_id, None)
 
     async def generate_batch(self, requests: Sequence[TTSRequest]) -> list[bytes | Exception]:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, self._generate_batch_sync, list(requests))
 
     def _generate_batch_sync(self, requests: list[TTSRequest]) -> list[bytes | Exception]:
-        texts = [r.text for r in requests]
-        languages = [r.language for r in requests]
-        instructs = [r.instruct for r in requests]
+        results: list[bytes | Exception | None] = [None] * len(requests)
 
-        wavs, sr = self._model.generate_voice_design(
-            text=texts,
-            language=languages,
-            instruct=instructs,
+        design_indices = [i for i, r in enumerate(requests) if r.voice_id is None]
+        clone_groups: dict[str, list[int]] = {}
+        for i, r in enumerate(requests):
+            if r.voice_id is not None:
+                clone_groups.setdefault(r.voice_id, []).append(i)
+
+        if design_indices:
+            self._run_group(requests, design_indices, self._design_generate, results)
+
+        for voice_id, indices in clone_groups.items():
+            try:
+                prompt = self._get_clone_prompt(voice_id)
+            except Exception as exc:  # noqa: BLE001 - fail this group only
+                logger.warning("clone prompt unavailable for voice %r: %s", voice_id, exc)
+                for i in indices:
+                    results[i] = exc
+                continue
+
+            def clone_fn(sub_requests, _prompt=prompt):
+                return self._clone_model.generate_voice_clone(
+                    text=[r.text for r in sub_requests],
+                    language=[r.language for r in sub_requests],
+                    voice_clone_prompt=_prompt,
+                    max_new_tokens=self._settings.max_new_tokens,
+                )
+
+            self._run_group(requests, indices, clone_fn, results)
+
+        return results  # type: ignore[return-value]
+
+    def _design_generate(self, sub_requests: list[TTSRequest]):
+        return self._model.generate_voice_design(
+            text=[r.text for r in sub_requests],
+            language=[r.language for r in sub_requests],
+            instruct=[r.instruct for r in sub_requests],
             max_new_tokens=self._settings.max_new_tokens,
         )
 
-        if len(wavs) != len(requests):
-            raise ValueError(
-                f"generate_voice_design returned {len(wavs)} wav(s) for {len(requests)} request(s)"
-            )
+    def _get_clone_prompt(self, voice_id: str):
+        if not self._settings.voice_clone_enabled or self._clone_model is None:
+            raise RuntimeError("voice cloning is disabled")
+        cached = self._clone_prompts.get(voice_id)
+        if cached is not None:
+            return cached
+        voice = self._voices.get(voice_id) if self._voices is not None else None
+        if voice is None:
+            raise RuntimeError(f"unknown voice_id: {voice_id}")
+        prompt = self._clone_model.create_voice_clone_prompt(
+            ref_audio=str(voice.wav_path),
+            ref_text=voice.ref_text,
+            x_vector_only_mode=False,
+        )
+        self._clone_prompts[voice_id] = prompt
+        return prompt
+
+    def _run_group(
+        self,
+        requests: list[TTSRequest],
+        indices: list[int],
+        gen_fn,
+        results: "list[bytes | Exception | None]",
+    ) -> None:
+        """Generate the subset `indices` with gen_fn, run the audio
+        self-check + retry loop on it, and write outcomes into `results`
+        at the original batch positions. Any failure here affects only
+        this group's items."""
+        sub = [requests[i] for i in indices]
+        try:
+            wavs, sr = gen_fn(sub)
+            if len(wavs) != len(sub):
+                raise ValueError(
+                    f"model returned {len(wavs)} wav(s) for {len(sub)} request(s)"
+                )
+        except Exception as exc:  # noqa: BLE001 - fail this group only
+            logger.exception("generation failed for group of %d item(s)", len(sub))
+            for i in indices:
+                results[i] = exc
+            return
 
         if not self._settings.audio_self_check_enabled:
-            return [_wav_to_bytes(wav, sr) for wav in wavs]
+            for pos, i in enumerate(indices):
+                results[i] = _wav_to_bytes(wavs[pos], sr)
+            return
 
         max_wps = self._settings.max_plausible_words_per_second
-        results: list[bytes | Exception | None] = [None] * len(requests)
         last_durations: dict[int, float] = {}
-        pending: list[int] = []
-        for i, wav in enumerate(wavs):
-            last_durations[i] = len(wav) / sr
-            if is_audio_abnormal(wav, sr, texts[i], max_wps):
-                pending.append(i)
+        pending: list[int] = []  # positions within this group
+        for pos, i in enumerate(indices):
+            wav = wavs[pos]
+            last_durations[pos] = len(wav) / sr
+            if is_audio_abnormal(wav, sr, requests[i].text, max_wps):
+                pending.append(pos)
             else:
                 results[i] = _wav_to_bytes(wav, sr)
 
         if pending:
             self.self_check_flagged += len(pending)
-            for i in pending:
-                word_count = len(texts[i].split())
-                actual_s = last_durations[i]
+            for pos in pending:
+                text = requests[indices[pos]].text
+                word_count = len(text.split())
+                actual_s = last_durations[pos]
                 actual_wps = word_count / actual_s if actual_s > 0 else float("inf")
                 logger.info(
                     "audio self-check flagged item: %d words in %.2fs (%.1f words/sec, threshold %.1f)",
@@ -137,33 +220,29 @@ class TTSModelService:
         for _attempt in range(self._settings.audio_self_check_max_retries):
             if not pending:
                 break
+            retry_sub = [requests[indices[pos]] for pos in pending]
             try:
-                retry_wavs, retry_sr = self._model.generate_voice_design(
-                    text=[texts[i] for i in pending],
-                    language=[languages[i] for i in pending],
-                    instruct=[instructs[i] for i in pending],
-                    max_new_tokens=self._settings.max_new_tokens,
-                )
+                retry_wavs, retry_sr = gen_fn(retry_sub)
                 if len(retry_wavs) != len(pending):
                     raise ValueError(
-                        f"generate_voice_design returned {len(retry_wavs)} wav(s) "
+                        f"model returned {len(retry_wavs)} wav(s) "
                         f"for {len(pending)} retry request(s)"
                     )
             except Exception as exc:  # noqa: BLE001 - isolate retry failure to pending items only
                 logger.exception("audio self-check retry failed for %d item(s)", len(pending))
-                for i in pending:
-                    results[i] = exc
+                for pos in pending:
+                    results[indices[pos]] = exc
                 pending = []
                 break
 
             still_pending = []
-            for pos, i in enumerate(pending):
-                wav = retry_wavs[pos]
-                last_durations[i] = len(wav) / retry_sr
-                if is_audio_abnormal(wav, retry_sr, texts[i], max_wps):
-                    still_pending.append(i)
+            for rpos, pos in enumerate(pending):
+                wav = retry_wavs[rpos]
+                last_durations[pos] = len(wav) / retry_sr
+                if is_audio_abnormal(wav, retry_sr, requests[indices[pos]].text, max_wps):
+                    still_pending.append(pos)
                 else:
-                    results[i] = _wav_to_bytes(wav, retry_sr)
+                    results[indices[pos]] = _wav_to_bytes(wav, retry_sr)
                     self.self_check_recovered += 1
                     logger.info("audio self-check recovered item on retry %d", _attempt + 1)
             pending = still_pending
@@ -175,13 +254,12 @@ class TTSModelService:
                 self._settings.audio_self_check_max_retries,
                 len(pending),
             )
-            for i in pending:
-                word_count = len(texts[i].split())
+            for pos in pending:
+                text = requests[indices[pos]].text
+                word_count = len(text.split())
                 expected_min_s = word_count / max_wps
-                results[i] = RuntimeError(
+                results[indices[pos]] = RuntimeError(
                     f"audio self-check failed after {self._settings.audio_self_check_max_retries} "
-                    f"retries: got {last_durations[i]:.2f}s for {word_count} words "
+                    f"retries: got {last_durations[pos]:.2f}s for {word_count} words "
                     f"(expected >= {expected_min_s:.2f}s)"
                 )
-
-        return results  # type: ignore[return-value]
