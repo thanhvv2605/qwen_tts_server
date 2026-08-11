@@ -144,7 +144,89 @@ Request phải chờ quá `QWEN_TTS_REQUEST_TIMEOUT_S` (mặc định 120s) mà 
 
 ---
 
-## 2. `GET /health`
+## 2. Jobs API (xử lý bất đồng bộ theo lô)
+
+Dành cho lô lớn (ví dụ hàng trăm đoạn text): gửi 1 job, poll tiến độ, tải
+từng file khi xong. Job **không** sống sót khi server restart (client gửi
+lại), và toàn bộ kết quả cũ bị xóa mỗi lần server khởi động.
+
+### `POST /v1/jobs` — tạo job
+
+```bash
+curl -X POST http://127.0.0.1:8000/v1/jobs \
+  -H "Content-Type: application/json" \
+  -d '{
+    "items": [
+      {"text": "Đoạn 1...", "language": "Auto", "instruct": "Giọng nữ trẻ..."},
+      {"text": "Đoạn 2...", "language": "Auto", "instruct": "Giọng nữ trẻ..."}
+    ]
+  }'
+```
+
+Response `202`:
+```json
+{"job_id": "j_a1b2c3d4e5f6", "status": "pending", "total_items": 2}
+```
+
+- Mỗi item validate đúng như endpoint đồng bộ (text ≤2000 ký tự, instruct
+  bắt buộc, language trong danh sách). Bất kỳ item nào sai → `422`, không
+  item nào được nhận.
+- Tối đa `QWEN_TTS_MAX_ITEMS_PER_JOB` (mặc định 1000) items/job → quá → `422`.
+
+### `GET /v1/jobs/{job_id}` — poll tiến độ
+
+```bash
+curl http://127.0.0.1:8000/v1/jobs/j_a1b2c3d4e5f6
+```
+
+Response `200`:
+```json
+{
+  "job_id": "j_a1b2c3d4e5f6",
+  "status": "running",
+  "total_items": 578,
+  "done": 213,
+  "failed": 1,
+  "items": [
+    {"index": 0, "status": "done"},
+    {"index": 1, "status": "failed", "error": "audio self-check failed after 2 retries: ..."},
+    {"index": 2, "status": "running"},
+    {"index": 3, "status": "pending"}
+  ]
+}
+```
+
+- Job `status`: `pending` → `running` → `completed` |
+  `completed_with_errors` | `cancelled`.
+- Item `status`: `pending` | `running` | `done` | `failed` | `cancelled`.
+- Job không tồn tại → `404`.
+
+### `GET /v1/jobs/{job_id}/items/{index}/audio` — tải audio 1 item
+
+```bash
+curl http://127.0.0.1:8000/v1/jobs/j_a1b2c3d4e5f6/items/0/audio -o item0.wav
+```
+
+- Item `done` → `200` binary WAV. Tải được ngay khi item xong, không cần
+  chờ cả job.
+- Job không tồn tại hoặc index ngoài phạm vi → `404`.
+- Item chưa xong (pending/running) hoặc failed/cancelled → `409`
+  `{"detail": "item not ready: <status>"}`.
+
+### `DELETE /v1/jobs/{job_id}` — hủy job
+
+```bash
+curl -X DELETE http://127.0.0.1:8000/v1/jobs/j_a1b2c3d4e5f6
+```
+
+- Item đang chạy trên GPU chạy nốt (kết quả vẫn tải được); item còn
+  `pending` chuyển thành `cancelled`.
+- Idempotent: hủy job đã xong/đã hủy → `200`, không đổi gì.
+- Response: cùng shape với `GET /v1/jobs/{job_id}`.
+
+---
+
+## 3. `GET /health`
 
 Kiểm tra trạng thái server. **Luôn trả lời nhanh**, không đi qua hàng đợi batch (không bị chặn dù server đang bận xử lý TTS).
 

@@ -47,6 +47,16 @@ Request body:
 - `language` one of: Auto, Chinese, English, Japanese, Korean, German, French, Russian, Portuguese, Spanish, Italian
 - Response: `audio/wav` binary (200), or `422` (invalid input), `504` (queue timeout), `500` (generation error) — errors return `{"detail": "..."}`
 
+### Jobs API (bất đồng bộ, cho lô lớn)
+
+- `POST /v1/jobs` — gửi 1 job chứa tối đa 1000 items, nhận `job_id` ngay (202)
+- `GET /v1/jobs/{job_id}` — poll tiến độ per-item
+- `GET /v1/jobs/{job_id}/items/{index}/audio` — tải WAV từng item khi xong
+- `DELETE /v1/jobs/{job_id}` — hủy job
+
+Chi tiết và curl mẫu: xem `API.md`. Kết quả job bị xóa mỗi lần server
+khởi động lại; job không sống sót qua restart (client gửi lại).
+
 ### `GET /health`
 
 Returns `{"status", "model_loaded", "vram_free_gb", "queue_depth"}`.
@@ -59,6 +69,8 @@ All settings are environment variables prefixed `QWEN_TTS_` (see `app/config.py`
 export QWEN_TTS_PORT=8080          # only takes effect with `python -m app.main` — see Run above
 export QWEN_TTS_MAX_BATCH_SIZE=8
 export QWEN_TTS_MODEL_ID=./models/Qwen3-TTS-12Hz-1.7B-VoiceDesign  # use a local path to skip re-downloading
+export QWEN_TTS_MAX_ITEMS_PER_JOB=1000
+export QWEN_TTS_RESULTS_DIR=./results   # bị xóa sạch mỗi lần server khởi động
 ```
 
 ## Manual verification
