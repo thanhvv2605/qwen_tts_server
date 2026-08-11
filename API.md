@@ -267,7 +267,40 @@ curl -X DELETE http://127.0.0.1:8000/v1/jobs/j_a1b2c3d4e5f6
 ## 3. Voices API (Đăng ký & quản lý giọng nói)
 
 Đăng ký các giọng nói tham chiếu để sử dụng với `/v1/tts/voice-design`.
-Giọng nói lưu trữ vĩnh viễn trong thư mục `QWEN_TTS_VOICES_DIR` (mặc định `./voices`).
+Giọng nói lưu trữ vĩnh viễn trong thư mục `QWEN_TTS_VOICES_DIR` (mặc định `./voices`)
+— sống qua restart, không như kết quả jobs.
+
+### Quy trình thêm giọng mới
+
+**Trường hợp 1 — đã có sẵn audio mẫu của giọng** (thu âm, hoặc audio từ
+nguồn khác): chỉ cần gọi `POST /v1/voices` bên dưới. Đăng ký giọng chỉ dùng
+model Base (clone), nên **hoạt động bình thường kể cả khi server đang chạy
+chế độ clone-only** (`QWEN_TTS_VOICE_DESIGN_ENABLED=false`).
+
+**Trường hợp 2 — muốn TẠO giọng mới từ mô tả bằng lời** (chưa có audio mẫu):
+cần model VoiceDesign. Nếu server đang chạy clone-only, restart tạm với
+VoiceDesign bật:
+
+```bash
+# 1. Restart server với cả 2 model (bỏ biến env hoặc =true)
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+# 2. Thiết kế audio mẫu bằng instruct (gen vài lần, chọn bản ưng nhất)
+curl -X POST http://127.0.0.1:8000/v1/tts/voice-design \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Câu mẫu dài 8-15 giây...", "language": "English", "instruct": "Mô tả giọng..."}' \
+  -o giong_moi.wav
+
+# 3. Đăng ký thành voice_id (ref_text phải khớp đúng text đã đọc ở bước 2)
+curl -X POST http://127.0.0.1:8000/v1/voices \
+  -F "name=giong_moi" -F "ref_text=Câu mẫu dài 8-15 giây..." -F "ref_audio=@giong_moi.wav"
+
+# 4. Restart lại về chế độ clone-only tiết kiệm VRAM
+QWEN_TTS_VOICE_DESIGN_ENABLED=false uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+Giọng đã đăng ký nằm bền trên đĩa nên chỉ cần thiết kế 1 lần, sau đó
+bật/tắt VoiceDesign hay restart bao nhiêu lần cũng không mất.
 
 ### `POST /v1/voices` — đăng ký giọng nói mới
 
