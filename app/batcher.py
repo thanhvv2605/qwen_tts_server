@@ -8,7 +8,7 @@ from app.schemas import TTSRequest
 
 logger = logging.getLogger(__name__)
 
-GenerateFn = Callable[[Sequence[TTSRequest]], Awaitable[list[bytes]]]
+GenerateFn = Callable[[Sequence[TTSRequest]], Awaitable[list[bytes | Exception]]]
 
 
 @dataclass
@@ -96,5 +96,9 @@ class BatchWorker:
                     i.future.set_exception(exc)
             return
         for i, result in zip(batch, results):
-            if not i.future.done():
+            if i.future.done():
+                continue
+            if isinstance(result, BaseException):
+                i.future.set_exception(result)
+            else:
                 i.future.set_result(result)

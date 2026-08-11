@@ -190,3 +190,32 @@ async def test_already_done_item_is_skipped_without_wasting_a_batch_slot():
 
     assert result == b"x"
     assert all("dead" not in batch for batch in calls)
+
+
+async def test_mixed_success_and_failure_results_resolve_independently():
+    async def mixed_generate(requests):
+        results = []
+        for r in requests:
+            if r.text == "bad":
+                results.append(RuntimeError("audio self-check failed"))
+            else:
+                results.append(f"audio-for-{r.text}".encode())
+        return results
+
+    worker = BatchWorker(generate_fn=mixed_generate, window_ms=100, max_batch_size=4)
+    worker.start()
+    try:
+        task_good1 = asyncio.create_task(worker.submit(_req("good1")))
+        task_bad = asyncio.create_task(worker.submit(_req("bad")))
+        task_good2 = asyncio.create_task(worker.submit(_req("good2")))
+        await asyncio.sleep(0.01)
+
+        good1_result = await task_good1
+        good2_result = await task_good2
+        with pytest.raises(RuntimeError, match="audio self-check failed"):
+            await task_bad
+    finally:
+        await worker.stop()
+
+    assert good1_result == b"audio-for-good1"
+    assert good2_result == b"audio-for-good2"
