@@ -57,6 +57,21 @@ Request body:
 Chi tiết và curl mẫu: xem `API.md`. Kết quả job bị xóa mỗi lần server
 khởi động lại; job không sống sót qua restart (client gửi lại).
 
+#### Lưu ý vận hành (Jobs API)
+
+- **Dung lượng đĩa**: WAV 24kHz PCM16 ≈ 48KB/giây audio. Một job 578 items
+  có thể chiếm ~0.5–1.5GB trong `QWEN_TTS_RESULTS_DIR`. Kết quả chỉ được
+  giải phóng khi server restart (thư mục bị xóa sạch lúc khởi động) — theo
+  dõi dung lượng đĩa nếu chạy nhiều job lớn giữa các lần restart.
+- **`DELETE` là hủy (cancel), không phải xóa**: kết quả các item đã xong
+  vẫn tải được sau khi hủy; file trên đĩa không bị xóa.
+- **Response của `DELETE` là snapshot trước khi cancel có hiệu lực** — poll
+  tiếp `GET /v1/jobs/{id}` đến khi `status` chuyển `cancelled`. Luôn tin
+  per-item status làm nguồn chính xác (job hủy sát lúc xong vẫn có thể có
+  toàn bộ items `done`).
+- **Item `failed` retry thế nào**: gửi lại các item failed trong một job
+  mới — job cũ không tự retry.
+
 ### `GET /health`
 
 Returns `{"status", "model_loaded", "vram_free_gb", "queue_depth"}`.

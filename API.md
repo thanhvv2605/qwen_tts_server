@@ -200,6 +200,8 @@ Response `200`:
   `completed_with_errors` | `cancelled`.
 - Item `status`: `pending` | `running` | `done` | `failed` | `cancelled`.
 - Job không tồn tại → `404`.
+- `items` luôn chứa đủ toàn bộ N items (ví dụ trên đã rút gọn) — cân nhắc
+  băng thông khi poll job lớn.
 
 ### `GET /v1/jobs/{job_id}/items/{index}/audio` — tải audio 1 item
 
@@ -212,6 +214,10 @@ curl http://127.0.0.1:8000/v1/jobs/j_a1b2c3d4e5f6/items/0/audio -o item0.wav
 - Job không tồn tại hoặc index ngoài phạm vi → `404`.
 - Item chưa xong (pending/running) hoặc failed/cancelled → `409`
   `{"detail": "item not ready: <status>"}`.
+- Trường hợp hiếm `404 {"detail": "result file missing"}`: item báo `done`
+  nhưng file WAV trên đĩa không còn (ví dụ bị xóa thủ công ngoài server) —
+  phân biệt với `404` "job không tồn tại"/"index ngoài phạm vi" ở trên qua
+  nội dung `detail`.
 
 ### `DELETE /v1/jobs/{job_id}` — hủy job
 
@@ -222,7 +228,13 @@ curl -X DELETE http://127.0.0.1:8000/v1/jobs/j_a1b2c3d4e5f6
 - Item đang chạy trên GPU chạy nốt (kết quả vẫn tải được); item còn
   `pending` chuyển thành `cancelled`.
 - Idempotent: hủy job đã xong/đã hủy → `200`, không đổi gì.
+- Job không tồn tại → `404`.
 - Response: cùng shape với `GET /v1/jobs/{job_id}`.
+- **Response của `DELETE` là snapshot ngay tại thời điểm gọi, TRƯỚC khi
+  cancel có hiệu lực** — item đang `running` vẫn hiện `running` trong
+  response này dù sắp bị đánh dấu `cancelled`. Phải poll tiếp
+  `GET /v1/jobs/{job_id}` đến khi `status` chuyển hẳn sang `cancelled` để
+  biết trạng thái cuối cùng.
 
 ---
 

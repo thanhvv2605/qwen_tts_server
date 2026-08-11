@@ -137,6 +137,39 @@ def test_cancel_unknown_job_returns_404(client):
     assert resp.status_code == 404
 
 
+def test_per_item_failure_surfaces_through_poll_and_download(client, monkeypatch):
+    async def mixed_generate_fn(requests):
+        from tests.conftest import fake_wav_bytes
+
+        results = []
+        for r in requests:
+            if r.text == "doomed":
+                results.append(RuntimeError("audio self-check failed after 2 retries"))
+            else:
+                results.append(fake_wav_bytes())
+        return results
+
+    monkeypatch.setattr(main_module.batch_worker, "_generate_fn", mixed_generate_fn)
+
+    resp = client.post("/v1/jobs", json={"items": [_item("fine"), _item("doomed")]})
+    job_id = resp.json()["job_id"]
+
+    final = _wait_until_finished(client, job_id)
+    assert final["status"] == "completed_with_errors"
+    assert final["done"] == 1
+    assert final["failed"] == 1
+    assert final["items"][0]["status"] == "done"
+    assert final["items"][1]["status"] == "failed"
+    assert "audio self-check failed" in final["items"][1]["error"]
+
+    ok_audio = client.get(f"/v1/jobs/{job_id}/items/0/audio")
+    assert ok_audio.status_code == 200
+
+    failed_audio = client.get(f"/v1/jobs/{job_id}/items/1/audio")
+    assert failed_audio.status_code == 409
+    assert failed_audio.json()["detail"] == "item not ready: failed"
+
+
 def test_lifespan_shuts_down_jobs_before_batcher():
     # The lifespan must cancel job runners BEFORE the batcher fails pending
     # futures: a runner still awaiting submit() when the batcher drains would

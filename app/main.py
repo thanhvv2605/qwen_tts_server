@@ -23,9 +23,14 @@ batch_worker = BatchWorker(
 
 
 async def _job_submit(request: TTSRequest) -> bytes:
-    return await asyncio.wait_for(
-        batch_worker.submit(request), timeout=settings.request_timeout_s
-    )
+    try:
+        return await asyncio.wait_for(
+            batch_worker.submit(request), timeout=settings.request_timeout_s
+        )
+    except asyncio.TimeoutError:
+        raise TimeoutError(
+            f"timed out waiting for GPU queue after {settings.request_timeout_s:.0f}s"
+        ) from None
 
 
 job_manager = JobManager(submit_fn=_job_submit, settings=settings)

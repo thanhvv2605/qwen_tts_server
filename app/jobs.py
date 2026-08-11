@@ -83,8 +83,8 @@ class JobManager:
     def create_job(self, requests: list[TTSRequest]) -> Job:
         job_id = f"j_{uuid.uuid4().hex[:12]}"
         job = Job(job_id=job_id, items=[JobItem(request=r) for r in requests])
-        self._jobs[job_id] = job
         (self._results_root() / job_id).mkdir(parents=True, exist_ok=True)
+        self._jobs[job_id] = job
         job.task = asyncio.create_task(self._run_job(job))
         return job
 
@@ -100,10 +100,10 @@ class JobManager:
         return job
 
     async def shutdown(self) -> None:
-        for job in self._jobs.values():
+        for job in list(self._jobs.values()):
             if job.task is not None and not job.task.done():
                 job.task.cancel()
-        for job in self._jobs.values():
+        for job in list(self._jobs.values()):
             if job.task is not None:
                 try:
                     await job.task
@@ -152,6 +152,10 @@ class JobManager:
                     item.status = ItemStatus.DONE
 
         try:
+            # return_exceptions stays False: CancelledError must propagate to
+            # the except block below for hard-cancel; run_item already catches
+            # all Exceptions, and a BaseException escape is handled by
+            # _run_job's crash wrapper.
             await asyncio.gather(*(run_item(i, item) for i, item in enumerate(job.items)))
         except asyncio.CancelledError:
             for item in job.items:
