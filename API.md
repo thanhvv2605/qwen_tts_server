@@ -23,6 +23,9 @@ Sinh audio từ text theo mô tả giọng nói mong muốn (voice design) hoặ
 
 ### curl mẫu
 
+**Thiết kế giọng bằng mô tả (`instruct`)** — mỗi lần gọi ra một giọng hơi
+khác nhau; cần model VoiceDesign (`QWEN_TTS_VOICE_DESIGN_ENABLED=true`):
+
 ```bash
 curl -X POST http://127.0.0.1:8000/v1/tts/voice-design \
   -H "Content-Type: application/json" \
@@ -30,6 +33,20 @@ curl -X POST http://127.0.0.1:8000/v1/tts/voice-design \
     "text": "Xin chào, đây là giọng nói được thiết kế riêng.",
     "language": "Auto",
     "instruct": "Giọng nữ trẻ, âm vui vẻ, tốc độ nói vừa phải."
+  }' \
+  -o output.wav
+```
+
+**Giọng cố định (`voice_id`)** — mọi lần gọi đều ra đúng giọng đã đăng ký
+(xem Voices API bên dưới); dùng model Base (clone):
+
+```bash
+curl -X POST http://127.0.0.1:8000/v1/tts/voice-design \
+  -H "Content-Type: application/json" \
+  -d '{
+    "text": "The James Webb telescope has captured light from distant galaxies.",
+    "language": "English",
+    "voice_id": "astronomy_male_en"
   }' \
   -o output.wav
 ```
@@ -104,7 +121,7 @@ curl -X POST http://127.0.0.1:8000/v1/tts/voice-design \
 }
 ```
 
-**Thiếu field bắt buộc (`instruct`):**
+**Thiếu cả `instruct` lẫn `voice_id` (hoặc cung cấp cả hai):**
 ```bash
 curl -X POST http://127.0.0.1:8000/v1/tts/voice-design \
   -H "Content-Type: application/json" \
@@ -114,14 +131,16 @@ curl -X POST http://127.0.0.1:8000/v1/tts/voice-design \
 {
   "detail": [
     {
-      "type": "missing",
-      "loc": ["body", "instruct"],
-      "msg": "Field required",
-      "input": { "text": "hello", "language": "English" }
+      "type": "value_error",
+      "loc": ["body"],
+      "msg": "Value error, exactly one of 'instruct' or 'voice_id' must be provided",
+      "input": { "text": "hello", "language": "English" },
+      "ctx": { "error": {} }
     }
   ]
 }
 ```
+Cung cấp cả hai field cùng lúc cũng trả về đúng message này.
 
 #### `500 Internal Server Error` — lỗi khi sinh audio
 
