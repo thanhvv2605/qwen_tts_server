@@ -94,6 +94,11 @@ class TTSModelService:
             max_new_tokens=self._settings.max_new_tokens,
         )
 
+        if len(wavs) != len(requests):
+            raise ValueError(
+                f"generate_voice_design returned {len(wavs)} wav(s) for {len(requests)} request(s)"
+            )
+
         max_wps = self._settings.max_plausible_words_per_second
         results: list[bytes | Exception | None] = [None] * len(requests)
         pending = [

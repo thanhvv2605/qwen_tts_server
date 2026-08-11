@@ -176,6 +176,27 @@ async def test_generate_batch_returns_exception_for_item_that_never_recovers():
         assert call == ("always broken",)
 
 
+class _ShortResultModel:
+    def generate_voice_design(self, text, language, instruct, max_new_tokens=None):
+        # Returns one fewer wav than requested - a model contract violation.
+        wavs = [np.zeros(24000, dtype="float32") for _ in text[:-1]]
+        return wavs, 24000
+
+
+async def test_generate_batch_raises_on_short_wavs_list():
+    settings = Settings(_env_file=None)
+    service = TTSModelService(settings)
+    service._model = _ShortResultModel()
+
+    requests = [
+        TTSRequest(text="hello", language="English", instruct="calm voice"),
+        TTSRequest(text="world", language="English", instruct="calm voice"),
+    ]
+
+    with pytest.raises(ValueError, match="wav"):
+        await service.generate_batch(requests)
+
+
 def test_is_loaded_false_before_load():
     settings = Settings(_env_file=None)
     service = TTSModelService(settings)
