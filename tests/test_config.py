@@ -17,6 +17,9 @@ def test_default_settings():
     assert settings.audio_self_check_enabled is True
     assert settings.max_items_per_job == 1000
     assert settings.results_dir == "./results"
+    assert settings.clone_model_id == "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
+    assert settings.voices_dir == "./voices"
+    assert settings.voice_clone_enabled is True
 
 
 def test_env_override(monkeypatch):
@@ -47,3 +50,13 @@ def test_env_override_job_settings(monkeypatch):
     settings = Settings(_env_file=None)
     assert settings.max_items_per_job == 50
     assert settings.results_dir == "/tmp/tts-results"
+
+
+def test_env_override_voice_clone_settings(monkeypatch):
+    monkeypatch.setenv("QWEN_TTS_CLONE_MODEL_ID", "./models/base")
+    monkeypatch.setenv("QWEN_TTS_VOICES_DIR", "/tmp/tts-voices")
+    monkeypatch.setenv("QWEN_TTS_VOICE_CLONE_ENABLED", "false")
+    settings = Settings(_env_file=None)
+    assert settings.clone_model_id == "./models/base"
+    assert settings.voices_dir == "/tmp/tts-voices"
+    assert settings.voice_clone_enabled is False

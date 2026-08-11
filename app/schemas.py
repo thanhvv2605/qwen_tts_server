@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 SUPPORTED_LANGUAGES = {
     "Auto",
@@ -18,7 +18,8 @@ SUPPORTED_LANGUAGES = {
 class TTSRequest(BaseModel):
     text: str
     language: str = "Auto"
-    instruct: str
+    instruct: str | None = None
+    voice_id: str | None = None
 
     @field_validator("text")
     @classmethod
@@ -32,10 +33,22 @@ class TTSRequest(BaseModel):
 
     @field_validator("instruct")
     @classmethod
-    def instruct_not_empty(cls, v: str) -> str:
+    def instruct_not_empty(cls, v: "str | None") -> "str | None":
+        if v is None:
+            return None
         v = v.strip()
         if not v:
-            raise ValueError("instruct must not be empty")
+            raise ValueError("instruct must not be empty when provided")
+        return v
+
+    @field_validator("voice_id")
+    @classmethod
+    def voice_id_not_empty(cls, v: "str | None") -> "str | None":
+        if v is None:
+            return None
+        v = v.strip()
+        if not v:
+            raise ValueError("voice_id must not be empty when provided")
         return v
 
     @field_validator("language")
@@ -44,6 +57,12 @@ class TTSRequest(BaseModel):
         if v not in SUPPORTED_LANGUAGES:
             raise ValueError(f"language must be one of {sorted(SUPPORTED_LANGUAGES)}")
         return v
+
+    @model_validator(mode="after")
+    def exactly_one_of_instruct_or_voice_id(self) -> "TTSRequest":
+        if (self.instruct is None) == (self.voice_id is None):
+            raise ValueError("exactly one of 'instruct' or 'voice_id' must be provided")
+        return self
 
 
 class JobSubmitRequest(BaseModel):

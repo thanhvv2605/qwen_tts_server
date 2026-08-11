@@ -56,3 +56,30 @@ def test_job_submit_request_rejects_empty_items():
 def test_job_submit_request_rejects_invalid_item():
     with pytest.raises(ValidationError):
         JobSubmitRequest(items=[{"text": "", "language": "English", "instruct": "calm"}])
+
+
+def test_voice_id_alone_is_valid():
+    req = TTSRequest(text="hello", language="English", voice_id="astronomy_male_en")
+    assert req.voice_id == "astronomy_male_en"
+    assert req.instruct is None
+
+
+def test_instruct_alone_is_valid_unchanged():
+    req = TTSRequest(text="hello", language="English", instruct="calm voice")
+    assert req.instruct == "calm voice"
+    assert req.voice_id is None
+
+
+def test_both_instruct_and_voice_id_rejected():
+    with pytest.raises(ValidationError):
+        TTSRequest(text="hello", instruct="calm voice", voice_id="astronomy_male_en")
+
+
+def test_neither_instruct_nor_voice_id_rejected():
+    with pytest.raises(ValidationError):
+        TTSRequest(text="hello", language="English")
+
+
+def test_blank_voice_id_rejected():
+    with pytest.raises(ValidationError):
+        TTSRequest(text="hello", voice_id="   ")

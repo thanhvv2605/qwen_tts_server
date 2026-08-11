@@ -9,3 +9,4 @@ models/
 .pytest_cache/
 .env
 results/
+voices/
