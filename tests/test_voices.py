@@ -1,4 +1,5 @@
 import io
+import logging
 
 import numpy as np
 import pytest
@@ -50,7 +51,7 @@ def test_register_duplicate_name_rejected(tmp_path):
         reg.register("voice_a", _wav_bytes(), "other text")
 
 
-@pytest.mark.parametrize("bad_name", ["", "UPPER", "has space", "a" * 65, "việt"])
+@pytest.mark.parametrize("bad_name", ["", "UPPER", "has space", "a" * 65, "việt", "voice_a\n"])
 def test_register_invalid_name_rejected(tmp_path, bad_name):
     reg = VoiceRegistry(_settings(tmp_path))
     reg.scan()
@@ -102,6 +103,8 @@ def test_scan_skips_malformed_entries(tmp_path, caplog):
     (root / "not_audio" / "ref.wav").write_bytes(b"garbage")
     (root / "not_audio" / "ref.txt").write_text("t", encoding="utf-8")
 
-    reg = VoiceRegistry(settings)
-    reg.scan()
+    with caplog.at_level(logging.WARNING):
+        reg = VoiceRegistry(settings)
+        reg.scan()
     assert reg.list_voices() == []
+    assert "skipping" in caplog.text

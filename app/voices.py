@@ -69,7 +69,7 @@ class VoiceRegistry:
         logger.info("voice registry loaded %d voice(s) from %s", len(self._voices), root)
 
     def register(self, name: str, audio_bytes: bytes, ref_text: str) -> VoiceInfo:
-        if not _NAME_RE.match(name or ""):
+        if not _NAME_RE.fullmatch(name or ""):
             raise InvalidVoiceError("name must match [a-z0-9_-]{1,64}")
         if name in self._voices:
             raise DuplicateVoiceError(f"voice {name!r} already exists")
@@ -105,5 +105,12 @@ class VoiceRegistry:
         info = self._voices.pop(voice_id, None)
         if info is None:
             return False
-        shutil.rmtree(self._root() / voice_id, ignore_errors=True)
+        try:
+            shutil.rmtree(self._root() / voice_id)
+        except OSError:
+            logger.warning(
+                "failed to remove voice directory for %r; it may reappear after restart",
+                voice_id,
+                exc_info=True,
+            )
         return True
