@@ -199,6 +199,26 @@ Response `202`:
   generate (không phải lúc nhận request).
 - Tối đa `QWEN_TTS_MAX_ITEMS_PER_JOB` (mặc định 1000) items/job → quá → `422`.
 
+**Pattern khuyến nghị — cả lô dùng chung 1 giọng cố định** (use-case chính,
+ví dụ hàng trăm short cùng một kênh):
+
+```bash
+curl -X POST http://127.0.0.1:8000/v1/jobs \
+  -H "Content-Type: application/json" \
+  -d '{
+    "items": [
+      {"text": "Đoạn 1...", "language": "English", "voice_id": "astronomy_male_en"},
+      {"text": "Đoạn 2...", "language": "English", "voice_id": "astronomy_male_en"},
+      {"text": "Đoạn 3...", "language": "English", "voice_id": "astronomy_male_en"}
+    ]
+  }'
+```
+
+Mọi item cùng `voice_id` → mọi audio ra **cùng một giọng**, và các item được
+gộp batch GPU hiệu quả nhất (clone prompt chỉ build 1 lần rồi cache). Tránh
+trộn nhiều `voice_id` khác nhau chạy đồng thời nếu không cần — mỗi batch sẽ
+phải tách thành nhiều lần gọi model theo từng giọng, giảm throughput.
+
 ### `GET /v1/jobs/{job_id}` — poll tiến độ
 
 ```bash
