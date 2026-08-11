@@ -3,6 +3,7 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Response
+from fastapi.responses import FileResponse
 
 from app import model as model_module
 from app.batcher import BatchWorker
@@ -93,7 +94,7 @@ async def get_job(job_id: str) -> dict:
 
 
 @app.get("/v1/jobs/{job_id}/items/{index}/audio")
-async def get_job_item_audio(job_id: str, index: int) -> Response:
+async def get_job_item_audio(job_id: str, index: int) -> FileResponse:
     job = job_manager.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
@@ -102,8 +103,10 @@ async def get_job_item_audio(job_id: str, index: int) -> Response:
     item = job.items[index]
     if item.status is not ItemStatus.DONE:
         raise HTTPException(status_code=409, detail=f"item not ready: {item.status.value}")
-    wav_bytes = job_manager.audio_path(job_id, index).read_bytes()
-    return Response(content=wav_bytes, media_type="audio/wav")
+    path = job_manager.audio_path(job_id, index)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="result file missing")
+    return FileResponse(path, media_type="audio/wav")
 
 
 @app.delete("/v1/jobs/{job_id}")

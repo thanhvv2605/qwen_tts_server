@@ -1,4 +1,5 @@
 import io
+import threading
 import time
 
 import soundfile as sf
@@ -73,11 +74,21 @@ def test_get_unknown_job_returns_404(client):
 def test_download_unfinished_item_returns_409(client, monkeypatch):
     import asyncio
 
-    async def hanging_generate_fn(requests):
-        await asyncio.sleep(30)
-        return [b"" for _ in requests]
+    # A cooperative, bounded gate rather than a fixed sleep: even if the
+    # batcher's collection window closes and captures this fn into an
+    # in-flight dispatch before monkeypatch teardown runs, setting the
+    # threading.Event below lets that dispatch complete promptly instead of
+    # stalling the shared, process-lifetime batch_worker for a fixed delay.
+    release = threading.Event()
 
-    monkeypatch.setattr(main_module.batch_worker, "_generate_fn", hanging_generate_fn)
+    async def gated_generate_fn(requests):
+        while not release.is_set():
+            await asyncio.sleep(0.01)
+        from tests.conftest import fake_wav_bytes
+
+        return [fake_wav_bytes() for _ in requests]
+
+    monkeypatch.setattr(main_module.batch_worker, "_generate_fn", gated_generate_fn)
 
     resp = client.post("/v1/jobs", json={"items": [_item("slow")]})
     job_id = resp.json()["job_id"]
@@ -89,7 +100,10 @@ def test_download_unfinished_item_returns_409(client, monkeypatch):
     out_of_range = client.get(f"/v1/jobs/{job_id}/items/5/audio")
     assert out_of_range.status_code == 404
 
-    client.delete(f"/v1/jobs/{job_id}")
+    # Unblock the gated generation so nothing lingers into later tests, then
+    # let the 1-item job finish cleanly.
+    release.set()
+    _wait_until_finished(client, job_id)
 
 
 def test_cancel_job_and_idempotency(client, monkeypatch):
@@ -121,3 +135,34 @@ def test_cancel_job_and_idempotency(client, monkeypatch):
 def test_cancel_unknown_job_returns_404(client):
     resp = client.delete("/v1/jobs/j_doesnotexist")
     assert resp.status_code == 404
+
+
+def test_lifespan_shuts_down_jobs_before_batcher():
+    # The lifespan must cancel job runners BEFORE the batcher fails pending
+    # futures: a runner still awaiting submit() when the batcher drains would
+    # see RuntimeError("worker stopped") and mark items failed instead of
+    # cancelled. Pin the call order.
+    import asyncio
+    import unittest.mock as mock
+
+    calls = []
+
+    async def fake_jm_shutdown():
+        calls.append("job_manager.shutdown")
+
+    async def fake_bw_stop():
+        calls.append("batch_worker.stop")
+
+    with mock.patch.object(main_module.job_manager, "shutdown", fake_jm_shutdown), \
+         mock.patch.object(main_module.batch_worker, "stop", fake_bw_stop), \
+         mock.patch.object(main_module.model_service, "load", lambda: None), \
+         mock.patch.object(main_module.batch_worker, "start", lambda: None), \
+         mock.patch.object(main_module.job_manager, "wipe_results_dir", lambda: None):
+
+        async def run_lifespan():
+            async with main_module.lifespan(main_module.app):
+                pass
+
+        asyncio.run(run_lifespan())
+
+    assert calls == ["job_manager.shutdown", "batch_worker.stop"]
