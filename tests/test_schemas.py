@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from app.schemas import TTSRequest
+from app.schemas import TTSRequest, JobSubmitRequest
 
 
 def test_valid_request():
@@ -34,3 +34,25 @@ def test_empty_instruct_rejected():
 def test_unsupported_language_rejected():
     with pytest.raises(ValidationError):
         TTSRequest(text="Hello", language="Klingon", instruct="calm voice")
+
+
+def test_job_submit_request_valid():
+    req = JobSubmitRequest(
+        items=[
+            {"text": "hello", "language": "English", "instruct": "calm voice"},
+            {"text": "world", "instruct": "excited voice"},
+        ]
+    )
+    assert len(req.items) == 2
+    assert req.items[0].text == "hello"
+    assert req.items[1].language == "Auto"
+
+
+def test_job_submit_request_rejects_empty_items():
+    with pytest.raises(ValidationError):
+        JobSubmitRequest(items=[])
+
+
+def test_job_submit_request_rejects_invalid_item():
+    with pytest.raises(ValidationError):
+        JobSubmitRequest(items=[{"text": "", "language": "English", "instruct": "calm"}])

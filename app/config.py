@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     max_plausible_words_per_second: float = 4.5
     audio_self_check_max_retries: int = 2
     audio_self_check_enabled: bool = True
+    max_items_per_job: int = 1000
+    results_dir: str = "./results"
 
 
 settings = Settings()

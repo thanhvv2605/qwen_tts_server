@@ -15,6 +15,8 @@ def test_default_settings():
     assert settings.max_plausible_words_per_second == 4.5
     assert settings.audio_self_check_max_retries == 2
     assert settings.audio_self_check_enabled is True
+    assert settings.max_items_per_job == 1000
+    assert settings.results_dir == "./results"
 
 
 def test_env_override(monkeypatch):
@@ -37,3 +39,11 @@ def test_env_override_audio_self_check_enabled(monkeypatch):
     monkeypatch.setenv("QWEN_TTS_AUDIO_SELF_CHECK_ENABLED", "false")
     settings = Settings(_env_file=None)
     assert settings.audio_self_check_enabled is False
+
+
+def test_env_override_job_settings(monkeypatch):
+    monkeypatch.setenv("QWEN_TTS_MAX_ITEMS_PER_JOB", "50")
+    monkeypatch.setenv("QWEN_TTS_RESULTS_DIR", "/tmp/tts-results")
+    settings = Settings(_env_file=None)
+    assert settings.max_items_per_job == 50
+    assert settings.results_dir == "/tmp/tts-results"

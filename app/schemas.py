@@ -1,4 +1,4 @@
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 SUPPORTED_LANGUAGES = {
     "Auto",
@@ -44,3 +44,7 @@ class TTSRequest(BaseModel):
         if v not in SUPPORTED_LANGUAGES:
             raise ValueError(f"language must be one of {sorted(SUPPORTED_LANGUAGES)}")
         return v
+
+
+class JobSubmitRequest(BaseModel):
+    items: list[TTSRequest] = Field(min_length=1)
