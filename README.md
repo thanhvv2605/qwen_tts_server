@@ -57,6 +57,16 @@ Request body:
 Chi tiết và curl mẫu: xem `API.md`. Kết quả job bị xóa mỗi lần server
 khởi động lại; job không sống sót qua restart (client gửi lại).
 
+### Voices API (đăng ký & quản lý giọng nói)
+
+- `POST /v1/voices` — đăng ký giọng nói mới từ file WAV + text (201, 409 nếu trùng, 422 nếu không hợp lệ)
+- `GET /v1/voices` — liệt kê tất cả giọng nói đã đăng ký (200)
+- `DELETE /v1/voices/{voice_id}` — xóa giọng nói (200, 404 nếu không tồn tại)
+
+Chi tiết, curl mẫu, và yêu cầu tên giọng (format `[a-z0-9_-]{1,64}`) + độ dài audio (0.5s–60s):
+xem phần Voices API trong `API.md`. Giọng nói lưu trữ vĩnh viễn trong `QWEN_TTS_VOICES_DIR`
+và sống sót qua restart (không giống job results).
+
 #### Lưu ý vận hành (Jobs API)
 
 - **Dung lượng đĩa**: WAV 24kHz PCM16 ≈ 48KB/giây audio. Một job 578 items
@@ -86,8 +96,28 @@ export QWEN_TTS_MAX_BATCH_SIZE=8
 export QWEN_TTS_MODEL_ID=./models/Qwen3-TTS-12Hz-1.7B-VoiceDesign  # use a local path to skip re-downloading
 export QWEN_TTS_MAX_ITEMS_PER_JOB=1000
 export QWEN_TTS_RESULTS_DIR=./results   # bị xóa sạch mỗi lần server khởi động
+export QWEN_TTS_CLONE_MODEL_ID=Qwen/Qwen3-TTS-12Hz-1.7B-Base  # mô hình Base cho voice cloning
+export QWEN_TTS_VOICES_DIR=./voices     # thư mục lưu giọng nói (sống sót qua restart)
+export QWEN_TTS_VOICE_CLONE_ENABLED=true  # bật/tắt tính năng voice cloning (default: true)
 ```
+
+## Operational notes (Voice Cloning)
+
+When `QWEN_TTS_VOICE_CLONE_ENABLED=true` (default):
+
+- **Dual checkpoints**: server loads both VoiceDesign (~4.3GB) and Base (~4GB) models → ~9–10GB VRAM total.
+  First startup downloads the Base model (~4GB) from HuggingFace. If the server appears to hang, it's likely
+  downloading; check `/health` endpoint to see `clone_model_loaded: true` when ready.
+  
+- **Persistent voices**: voices registered via `POST /v1/voices` persist in `QWEN_TTS_VOICES_DIR` (default `./voices`)
+  across server restarts. This differs from job results, which are wiped on every startup.
+  
+- **Monitoring**: check `/health` response for `model_loaded` and `clone_model_loaded` flags.
+  `vram_free_gb` shows available VRAM after both models are loaded.
 
 ## Manual verification
 
 After starting the server, run `python scripts/smoke_test.py` to confirm the model loaded and a real WAV file comes back.
+
+Optionally, use `python scripts/register_voices.py /path/to/voice_dir [base_url]` to bulk-register
+a directory of `{name}.wav` + `{name}.txt` pairs as voices.
