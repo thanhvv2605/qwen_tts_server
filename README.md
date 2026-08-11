@@ -84,7 +84,7 @@ và sống sót qua restart (không giống job results).
 
 ### `GET /health`
 
-Returns `{"status", "model_loaded", "vram_free_gb", "queue_depth"}`.
+Returns `{"status", "model_loaded", "clone_model_loaded", "vram_free_gb", "queue_depth"}`.
 
 ## Configuration
 
