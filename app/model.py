@@ -76,7 +76,12 @@ class TTSModelService:
         self.self_check_exhausted = 0
 
     def load(self) -> None:
-        check_vram(self._settings.device, self._settings.min_free_vram_gb)
+        required_gb = self._settings.min_free_vram_gb
+        if self._settings.voice_clone_enabled:
+            # Two 1.7B bf16 checkpoints + activations peak around 11-12GB;
+            # the single-model threshold alone would warn far too late.
+            required_gb += 6.0
+        check_vram(self._settings.device, required_gb)
         from qwen_tts import Qwen3TTSModel
 
         self._model = Qwen3TTSModel.from_pretrained(
@@ -85,11 +90,18 @@ class TTSModelService:
             dtype=torch.bfloat16,
         )
         if self._settings.voice_clone_enabled:
-            self._clone_model = Qwen3TTSModel.from_pretrained(
-                self._settings.clone_model_id,
-                device_map=self._settings.device,
-                dtype=torch.bfloat16,
-            )
+            try:
+                self._clone_model = Qwen3TTSModel.from_pretrained(
+                    self._settings.clone_model_id,
+                    device_map=self._settings.device,
+                    dtype=torch.bfloat16,
+                )
+            except Exception:  # noqa: BLE001 - degrade to clone-unavailable, keep design serving
+                logger.exception(
+                    "failed to load clone model %r; voice cloning will be unavailable",
+                    self._settings.clone_model_id,
+                )
+                self._clone_model = None
 
     def is_loaded(self) -> bool:
         return self._model is not None
@@ -146,8 +158,10 @@ class TTSModelService:
         )
 
     def _get_clone_prompt(self, voice_id: str):
-        if not self._settings.voice_clone_enabled or self._clone_model is None:
+        if not self._settings.voice_clone_enabled:
             raise RuntimeError("voice cloning is disabled")
+        if self._clone_model is None:
+            raise RuntimeError("voice cloning is unavailable: clone model failed to load")
         cached = self._clone_prompts.get(voice_id)
         if cached is not None:
             return cached

@@ -106,14 +106,18 @@ export QWEN_TTS_VOICE_CLONE_ENABLED=true  # bật/tắt tính năng voice clonin
 When `QWEN_TTS_VOICE_CLONE_ENABLED=true` (default):
 
 - **Dual checkpoints**: server loads both VoiceDesign (~4.3GB) and Base (~4GB) models → ~9–10GB VRAM total.
-  First startup downloads the Base model (~4GB) from HuggingFace. If the server appears to hang, it's likely
-  downloading; check `/health` endpoint to see `clone_model_loaded: true` when ready.
-  
+  First startup downloads the Base model (~4GB) from HuggingFace. `/health` is unreachable while lifespan is
+  still loading models, so it can't be used to watch progress — watch the server logs instead (download
+  progress prints there); `/health` only becomes available once both models have finished loading.
+- **VRAM threshold**: with cloning enabled, the startup VRAM warning threshold is
+  `QWEN_TTS_MIN_FREE_VRAM_GB + 6` (≈12GB by default) to account for both checkpoints loaded at once.
 - **Persistent voices**: voices registered via `POST /v1/voices` persist in `QWEN_TTS_VOICES_DIR` (default `./voices`)
   across server restarts. This differs from job results, which are wiped on every startup.
-  
 - **Monitoring**: check `/health` response for `model_loaded` and `clone_model_loaded` flags.
   `vram_free_gb` shows available VRAM after both models are loaded.
+- **Throughput**: trộn nhiều `voice_id` khác nhau trong cùng thời điểm làm giảm hiệu quả GPU (mỗi batch
+  phải tách thành nhiều lần gọi model theo từng giọng); để throughput tốt nhất, chạy các job cùng một
+  giọng tuần tự.
 
 ## Manual verification
 

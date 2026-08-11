@@ -55,6 +55,23 @@ def test_check_vram_raises_without_cuda(monkeypatch):
         check_vram("cuda:0", min_free_gb=6.0)
 
 
+def test_load_vram_threshold_scales_with_clone_enabled(monkeypatch):
+    checked = []
+
+    def fake_check_vram(device, min_free_gb):
+        checked.append(min_free_gb)
+        raise RuntimeError("stop before model load")
+
+    monkeypatch.setattr("app.model.check_vram", fake_check_vram)
+
+    with pytest.raises(RuntimeError):
+        TTSModelService(Settings(_env_file=None)).load()
+    with pytest.raises(RuntimeError):
+        TTSModelService(Settings(_env_file=None, voice_clone_enabled=False)).load()
+
+    assert checked == [12.0, 6.0]
+
+
 def test_wav_to_bytes_roundtrip():
     wav = np.zeros(4800, dtype="float32")
     data = _wav_to_bytes(wav, 24000)
@@ -385,6 +402,18 @@ async def test_clone_disabled_fails_clone_items_only():
     assert isinstance(results[0], bytes)
     assert isinstance(results[1], Exception)
     assert "voice cloning is disabled" in str(results[1])
+
+
+async def test_clone_model_load_failure_fails_clone_items_with_distinct_message():
+    settings = Settings(_env_file=None)  # enabled, but _clone_model stays None
+    service = TTSModelService(settings, _FakeRegistry({}))
+    service._model = _FakeModel()
+
+    results = await service.generate_batch(
+        [TTSRequest(text="clone item", language="English", voice_id="any")]
+    )
+    assert isinstance(results[0], Exception)
+    assert "unavailable" in str(results[0])
 
 
 async def test_clone_path_goes_through_self_check():

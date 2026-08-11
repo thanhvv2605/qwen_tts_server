@@ -422,7 +422,7 @@ curl http://127.0.0.1:8000/health
 | `status`           | string        | Luôn là `"ok"` nếu server còn phản hồi được.                        |
 | `model_loaded`     | boolean       | Model đã load xong lên GPU hay chưa (`false` trong lúc server đang khởi động/tải model). |
 | `clone_model_loaded` | boolean     | Mô hình Base (cho voice cloning) đã load xong hay chưa. `false` nếu `QWEN_TTS_VOICE_CLONE_ENABLED=false` hoặc model đang tải. |
-| `vram_free_gb`     | number\|null  | VRAM còn trống (GB). `null` nếu bất kỳ model nào chưa load xong.     |
+| `vram_free_gb`     | number\|null  | VRAM còn trống (GB). `null` khi model chính (VoiceDesign) chưa load xong.     |
 | `queue_depth`      | integer       | Số request đang chờ/đang xử lý trong batch worker (0 = rảnh).        |
 
 ---

@@ -94,6 +94,24 @@ def test_sync_generation_rejects_both_instruct_and_voice_id(client):
     assert resp.status_code == 422
 
 
+def test_register_invalidates_stale_clone_prompt(client, monkeypatch):
+    invalidated = []
+    monkeypatch.setattr(
+        main_module.model_service, "invalidate_clone_prompt", invalidated.append
+    )
+    resp = client.post(
+        "/v1/voices",
+        data={"name": "test_voice_reregister", "ref_text": "text"},
+        files={"ref_audio": _wav_upload()},
+    )
+    assert resp.status_code == 201
+    assert invalidated == ["test_voice_reregister"]
+
+    deleted = client.delete("/v1/voices/test_voice_reregister")
+    assert deleted.status_code == 200
+    assert invalidated == ["test_voice_reregister", "test_voice_reregister"]
+
+
 def test_job_items_accept_voice_id(client):
     import time
 

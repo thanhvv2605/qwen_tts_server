@@ -190,7 +190,8 @@ def test_lifespan_shuts_down_jobs_before_batcher():
          mock.patch.object(main_module.batch_worker, "stop", fake_bw_stop), \
          mock.patch.object(main_module.model_service, "load", lambda: None), \
          mock.patch.object(main_module.batch_worker, "start", lambda: None), \
-         mock.patch.object(main_module.job_manager, "wipe_results_dir", lambda: None):
+         mock.patch.object(main_module.job_manager, "wipe_results_dir", lambda: None), \
+         mock.patch.object(main_module.voice_registry, "scan", lambda: None):
 
         async def run_lifespan():
             async with main_module.lifespan(main_module.app):

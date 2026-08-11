@@ -144,6 +144,7 @@ async def register_voice(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except InvalidVoiceError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    model_service.invalidate_clone_prompt(info.voice_id)
     return {"voice_id": info.voice_id, "duration_s": round(info.duration_s, 1)}
 
 
