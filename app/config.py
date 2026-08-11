@@ -13,6 +13,8 @@ class Settings(BaseSettings):
     max_batch_size: int = 4
     max_new_tokens: int = 2048
     request_timeout_s: float = 120.0
+    max_plausible_words_per_second: float = 4.5
+    audio_self_check_max_retries: int = 2
 
 
 settings = Settings()
