@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     clone_model_id: str = "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
     voices_dir: str = "./voices"
     voice_clone_enabled: bool = True
+    voice_design_enabled: bool = True
 
 
 settings = Settings()

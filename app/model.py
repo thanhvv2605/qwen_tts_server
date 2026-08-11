@@ -76,20 +76,26 @@ class TTSModelService:
         self.self_check_exhausted = 0
 
     def load(self) -> None:
+        design_on = self._settings.voice_design_enabled
+        clone_on = self._settings.voice_clone_enabled
+        if not design_on and not clone_on:
+            logger.warning("both voice design and voice cloning are disabled; loading no models")
+            return
         required_gb = self._settings.min_free_vram_gb
-        if self._settings.voice_clone_enabled:
+        if design_on and clone_on:
             # Two 1.7B bf16 checkpoints + activations peak around 11-12GB;
             # the single-model threshold alone would warn far too late.
             required_gb += 6.0
         check_vram(self._settings.device, required_gb)
         from qwen_tts import Qwen3TTSModel
 
-        self._model = Qwen3TTSModel.from_pretrained(
-            self._settings.model_id,
-            device_map=self._settings.device,
-            dtype=torch.bfloat16,
-        )
-        if self._settings.voice_clone_enabled:
+        if design_on:
+            self._model = Qwen3TTSModel.from_pretrained(
+                self._settings.model_id,
+                device_map=self._settings.device,
+                dtype=torch.bfloat16,
+            )
+        if clone_on:
             try:
                 self._clone_model = Qwen3TTSModel.from_pretrained(
                     self._settings.clone_model_id,
@@ -126,7 +132,12 @@ class TTSModelService:
                 clone_groups.setdefault(r.voice_id, []).append(i)
 
         if design_indices:
-            self._run_group(requests, design_indices, self._design_generate, results)
+            if not self._settings.voice_design_enabled or self._model is None:
+                exc: Exception = RuntimeError("voice design is disabled")
+                for i in design_indices:
+                    results[i] = exc
+            else:
+                self._run_group(requests, design_indices, self._design_generate, results)
 
         for voice_id, indices in clone_groups.items():
             try:

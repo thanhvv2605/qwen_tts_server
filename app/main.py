@@ -69,7 +69,7 @@ async def voice_design(request: TTSRequest) -> Response:
 @app.get("/health")
 async def health() -> dict:
     vram_free_gb = None
-    if model_service.is_loaded():
+    if model_service.is_loaded() or model_service.clone_is_loaded():
         loop = asyncio.get_running_loop()
         vram_free_gb = await loop.run_in_executor(
             None, model_module.check_vram, settings.device, settings.min_free_vram_gb

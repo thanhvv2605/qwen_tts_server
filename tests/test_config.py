@@ -20,6 +20,7 @@ def test_default_settings():
     assert settings.clone_model_id == "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
     assert settings.voices_dir == "./voices"
     assert settings.voice_clone_enabled is True
+    assert settings.voice_design_enabled is True
 
 
 def test_env_override(monkeypatch):
@@ -60,3 +61,9 @@ def test_env_override_voice_clone_settings(monkeypatch):
     assert settings.clone_model_id == "./models/base"
     assert settings.voices_dir == "/tmp/tts-voices"
     assert settings.voice_clone_enabled is False
+
+
+def test_env_override_voice_design_enabled(monkeypatch):
+    monkeypatch.setenv("QWEN_TTS_VOICE_DESIGN_ENABLED", "false")
+    settings = Settings(_env_file=None)
+    assert settings.voice_design_enabled is False

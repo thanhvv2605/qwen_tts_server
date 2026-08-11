@@ -55,7 +55,7 @@ def test_check_vram_raises_without_cuda(monkeypatch):
         check_vram("cuda:0", min_free_gb=6.0)
 
 
-def test_load_vram_threshold_scales_with_clone_enabled(monkeypatch):
+def test_load_vram_threshold_scales_with_enabled_models(monkeypatch):
     checked = []
 
     def fake_check_vram(device, min_free_gb):
@@ -65,11 +65,13 @@ def test_load_vram_threshold_scales_with_clone_enabled(monkeypatch):
     monkeypatch.setattr("app.model.check_vram", fake_check_vram)
 
     with pytest.raises(RuntimeError):
-        TTSModelService(Settings(_env_file=None)).load()
+        TTSModelService(Settings(_env_file=None)).load()  # both enabled
     with pytest.raises(RuntimeError):
         TTSModelService(Settings(_env_file=None, voice_clone_enabled=False)).load()
+    with pytest.raises(RuntimeError):
+        TTSModelService(Settings(_env_file=None, voice_design_enabled=False)).load()
 
-    assert checked == [12.0, 6.0]
+    assert checked == [12.0, 6.0, 6.0]
 
 
 def test_wav_to_bytes_roundtrip():
@@ -494,3 +496,57 @@ async def test_offset_clone_group_failure_lands_at_original_index():
     assert isinstance(results[2], bytes)
     assert isinstance(results[3], Exception)
     assert "3 words" in str(results[3])  # "doomed clone text" word count in the exhaustion message
+
+
+async def test_design_disabled_fails_design_items_only():
+    settings = Settings(_env_file=None, voice_design_enabled=False)
+    registry = _FakeRegistry({"voice_a": _FakeVoiceInfo("ref a")})
+    service = TTSModelService(settings, registry)
+    service._clone_model = _FakeCloneModel()
+
+    requests = [
+        TTSRequest(text="design item", language="English", instruct="calm voice"),
+        TTSRequest(text="clone item", language="English", voice_id="voice_a"),
+    ]
+
+    results = await service.generate_batch(requests)
+    assert isinstance(results[0], Exception)
+    assert "voice design is disabled" in str(results[0])
+    assert isinstance(results[1], bytes)
+
+
+def test_load_selects_models_by_flags(monkeypatch):
+    import sys
+    import types
+
+    loaded: list[str] = []
+
+    class _FakeQwenModel:
+        @staticmethod
+        def from_pretrained(model_id, **kwargs):
+            loaded.append(model_id)
+            return object()
+
+    fake_module = types.SimpleNamespace(Qwen3TTSModel=_FakeQwenModel)
+    monkeypatch.setitem(sys.modules, "qwen_tts", fake_module)
+    monkeypatch.setattr("app.model.check_vram", lambda device, min_free_gb: 20.0)
+
+    settings = Settings(_env_file=None, voice_design_enabled=False)
+    service = TTSModelService(settings)
+    service.load()
+    assert loaded == [settings.clone_model_id]
+    assert service.is_loaded() is False
+    assert service.clone_is_loaded() is True
+
+    loaded.clear()
+    checked: list[float] = []
+    monkeypatch.setattr(
+        "app.model.check_vram",
+        lambda device, min_free_gb: checked.append(min_free_gb),
+    )
+    both_off = Settings(
+        _env_file=None, voice_design_enabled=False, voice_clone_enabled=False
+    )
+    TTSModelService(both_off).load()
+    assert loaded == []
+    assert checked == []  # neither model enabled -> VRAM check skipped

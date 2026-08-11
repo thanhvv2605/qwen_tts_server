@@ -137,6 +137,12 @@ ra lỗi này tại **thời điểm generate**, không phải tại lúc nhận
 Với Jobs API, item sẽ được đánh dấu `failed` với thông báo lỗi liên quan
 `voice_id` không tồn tại.
 
+Cũng xảy ra với message `"voice design is disabled"` khi
+`QWEN_TTS_VOICE_DESIGN_ENABLED=false` và request có `instruct` (voice-design
+item) — server tải khi đó không có model VoiceDesign, nên các item này fail
+tại thời điểm generate; item `voice_id` (clone) trong cùng batch/job không
+bị ảnh hưởng.
+
 ```json
 {
   "detail": "<thông báo lỗi cụ thể>"
@@ -422,7 +428,7 @@ curl http://127.0.0.1:8000/health
 | `status`           | string        | Luôn là `"ok"` nếu server còn phản hồi được.                        |
 | `model_loaded`     | boolean       | Model đã load xong lên GPU hay chưa (`false` trong lúc server đang khởi động/tải model). |
 | `clone_model_loaded` | boolean     | Mô hình Base (cho voice cloning) đã load xong hay chưa. `false` nếu `QWEN_TTS_VOICE_CLONE_ENABLED=false` hoặc model đang tải. |
-| `vram_free_gb`     | number\|null  | VRAM còn trống (GB). `null` khi model chính (VoiceDesign) chưa load xong.     |
+| `vram_free_gb`     | number\|null  | VRAM còn trống (GB). `null` chỉ khi **không có model nào** load xong (cả `model_loaded` và `clone_model_loaded` đều `false`). |
 | `queue_depth`      | integer       | Số request đang chờ/đang xử lý trong batch worker (0 = rảnh).        |
 
 ---
@@ -437,5 +443,13 @@ curl http://127.0.0.1:8000/health
   - Model Base (~1.7B, ~4GB) cho voice cloning (sử dụng `voice_id`)
   
   Tổng cộng khoảng **9–10GB VRAM**, lần khởi động đầu tiên sẽ tải Base checkpoint (~4GB) từ HuggingFace — nếu server có vẻ "treo" lúc khởi động, thường là do đang download.
+
+- **Kill switch voice design**: `QWEN_TTS_VOICE_DESIGN_ENABLED` (mặc định
+  `true`) hoạt động song song với `QWEN_TTS_VOICE_CLONE_ENABLED` — tắt để
+  chạy server chỉ-clone (chỉ tải model Base, tiết kiệm ~4-5GB VRAM). Khi
+  tắt, request `instruct` (`/v1/tts/voice-design` hoặc item `instruct`
+  trong Jobs API) trả `500`/`failed` với `"voice design is disabled"`;
+  request `voice_id` không bị ảnh hưởng. Nếu tắt cả hai flag, server không
+  tải model nào và mọi request TTS sẽ fail.
   
 - **Giọng nói vĩnh viễn**: giọng nói đã đăng ký lưu vĩnh viễn trong `QWEN_TTS_VOICES_DIR` (mặc định `./voices`) và **sống sót qua restart** của server, không giống job results (được xóa mỗi lần khởi động). Để xóa giọng nói, dùng `DELETE /v1/voices/{voice_id}`.

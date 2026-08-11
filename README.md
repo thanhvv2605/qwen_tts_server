@@ -99,6 +99,7 @@ export QWEN_TTS_RESULTS_DIR=./results   # bị xóa sạch mỗi lần server kh
 export QWEN_TTS_CLONE_MODEL_ID=Qwen/Qwen3-TTS-12Hz-1.7B-Base  # mô hình Base cho voice cloning
 export QWEN_TTS_VOICES_DIR=./voices     # thư mục lưu giọng nói (sống sót qua restart)
 export QWEN_TTS_VOICE_CLONE_ENABLED=true  # bật/tắt tính năng voice cloning (default: true)
+export QWEN_TTS_VOICE_DESIGN_ENABLED=true # tắt để chạy chỉ-clone, tiết kiệm ~4-5GB VRAM (default: true)
 ```
 
 ## Operational notes (Voice Cloning)
@@ -109,8 +110,11 @@ When `QWEN_TTS_VOICE_CLONE_ENABLED=true` (default):
   First startup downloads the Base model (~4GB) from HuggingFace. `/health` is unreachable while lifespan is
   still loading models, so it can't be used to watch progress — watch the server logs instead (download
   progress prints there); `/health` only becomes available once both models have finished loading.
-- **VRAM threshold**: with cloning enabled, the startup VRAM warning threshold is
-  `QWEN_TTS_MIN_FREE_VRAM_GB + 6` (≈12GB by default) to account for both checkpoints loaded at once.
+- **VRAM threshold**: only when **both** `QWEN_TTS_VOICE_DESIGN_ENABLED` and `QWEN_TTS_VOICE_CLONE_ENABLED`
+  are `true` (the default) does the startup VRAM warning threshold bump to `QWEN_TTS_MIN_FREE_VRAM_GB + 6`
+  (≈12GB by default), to account for both checkpoints loaded at once. With exactly one of the two enabled,
+  the threshold stays at `QWEN_TTS_MIN_FREE_VRAM_GB` (single checkpoint). With both disabled, no model
+  loads and the VRAM check is skipped entirely.
 - **Persistent voices**: voices registered via `POST /v1/voices` persist in `QWEN_TTS_VOICES_DIR` (default `./voices`)
   across server restarts. This differs from job results, which are wiped on every startup.
 - **Monitoring**: check `/health` response for `model_loaded` and `clone_model_loaded` flags.
@@ -118,6 +122,22 @@ When `QWEN_TTS_VOICE_CLONE_ENABLED=true` (default):
 - **Throughput**: trộn nhiều `voice_id` khác nhau trong cùng thời điểm làm giảm hiệu quả GPU (mỗi batch
   phải tách thành nhiều lần gọi model theo từng giọng); để throughput tốt nhất, chạy các job cùng một
   giọng tuần tự.
+
+## Operational notes (Voice Design kill switch)
+
+Khi `QWEN_TTS_VOICE_DESIGN_ENABLED=false` (ví dụ server production chỉ dùng
+voice cloning): server chỉ tải **một checkpoint** (Base, cho voice cloning),
+tiết kiệm ~4-5GB VRAM so với chạy song song hai model. `/health` báo
+`model_loaded: false`, `clone_model_loaded: true`. Request `instruct`
+(voice-design) sẽ fail từng item với `"voice design is disabled"` (`500`
+với endpoint đồng bộ; item `failed` với Jobs API) — request `voice_id`
+(clone) vẫn hoạt động bình thường. `python scripts/smoke_test.py` gọi
+endpoint `/v1/tts/voice-design` và assert `model_loaded: true`, nên
+**không áp dụng được** ở chế độ clone-only.
+
+Nếu tắt cả hai (`QWEN_TTS_VOICE_DESIGN_ENABLED=false` và
+`QWEN_TTS_VOICE_CLONE_ENABLED=false`), server khởi động mà không tải model
+nào (chỉ log warning), và mọi request TTS sẽ fail.
 
 ## Manual verification
 
