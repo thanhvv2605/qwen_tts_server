@@ -321,11 +321,16 @@ async def test_mixed_batch_splits_design_and_clone_preserving_order():
     service._model = design_model
     service._clone_model = clone_model
 
+    # texts with distinct word counts so each result is identifiable
     requests = [
-        TTSRequest(text="design one", language="English", instruct="calm voice"),
-        TTSRequest(text="clone one", language="English", voice_id="voice_a"),
-        TTSRequest(text="design two", language="English", instruct="calm voice"),
-        TTSRequest(text="clone two", language="English", voice_id="voice_a"),
+        TTSRequest(text="one", language="English", instruct="calm voice"),
+        TTSRequest(text="two words now", language="English", voice_id="voice_a"),
+        TTSRequest(text="this design has five words", language="English", instruct="calm voice"),
+        TTSRequest(
+            text="clone with exactly seven words in it",
+            language="English",
+            voice_id="voice_a",
+        ),
     ]
 
     results = await service.generate_batch(requests)
@@ -333,12 +338,19 @@ async def test_mixed_batch_splits_design_and_clone_preserving_order():
     assert all(isinstance(r, bytes) for r in results)
     # one clone call for the whole voice_a group, with the cached prompt
     assert clone_model.clone_calls == [
-        (("clone one", "clone two"), {"prompt_for": "ref a"})
+        (("two words now", "clone with exactly seven words in it"), {"prompt_for": "ref a"})
     ]
     # prompt built exactly once, then cached
     assert clone_model.prompt_builds == ["ref a"]
     await service.generate_batch([requests[1]])
     assert clone_model.prompt_builds == ["ref a"]
+
+    # decode each result and confirm the sample count identifies the right text
+    expected_word_counts = [1, 3, 5, 7]
+    for i, r in enumerate(results):
+        data, sr = sf.read(io.BytesIO(r))
+        expected_samples = max(int(expected_word_counts[i] / 2.5 * 24000), 1)
+        assert len(data) == expected_samples, f"result {i} has wrong audio for its text"
 
 
 async def test_unknown_voice_id_fails_only_its_items():
@@ -412,3 +424,44 @@ def test_clone_is_loaded_and_invalidate():
     service.invalidate_clone_prompt("v")
     assert "v" not in service._clone_prompts
     service.invalidate_clone_prompt("never-there")  # no raise
+
+
+async def test_offset_clone_group_failure_lands_at_original_index():
+    class _SelectiveTruncatingCloneModel(_FakeCloneModel):
+        """Returns truncated audio for the text "doomed clone text" on every
+        call; normal audio for everything else."""
+
+        def generate_voice_clone(self, text, language, voice_clone_prompt, max_new_tokens=None):
+            self.clone_calls.append((tuple(text), voice_clone_prompt))
+            wavs = []
+            for t in text:
+                if t == "doomed clone text":
+                    wavs.append(np.zeros(1, dtype="float32"))
+                else:
+                    wavs.append(
+                        np.zeros(max(int(len(t.split()) / 2.5 * 24000), 1), dtype="float32")
+                    )
+            return wavs, 24000
+
+    settings = Settings(_env_file=None)
+    registry = _FakeRegistry({"voice_a": _FakeVoiceInfo("ref a")})
+    service = TTSModelService(settings, registry)
+    service._model = _FakeModel()
+    service._clone_model = _SelectiveTruncatingCloneModel()
+
+    # Clone group occupies original indices [1, 3]; group positions [0, 1].
+    # The bad item is at group position 1 but ORIGINAL index 3.
+    requests = [
+        TTSRequest(text="design item one", language="English", instruct="calm voice"),
+        TTSRequest(text="good clone text", language="English", voice_id="voice_a"),
+        TTSRequest(text="design item two", language="English", instruct="calm voice"),
+        TTSRequest(text="doomed clone text", language="English", voice_id="voice_a"),
+    ]
+
+    results = await service.generate_batch(requests)
+
+    assert isinstance(results[0], bytes)
+    assert isinstance(results[1], bytes)
+    assert isinstance(results[2], bytes)
+    assert isinstance(results[3], Exception)
+    assert "3 words" in str(results[3])  # "doomed clone text" word count in the exhaustion message
