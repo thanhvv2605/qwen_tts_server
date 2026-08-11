@@ -51,6 +51,15 @@ def _wav_to_bytes(wav: np.ndarray, sample_rate: int) -> bytes:
     return buffer.getvalue()
 
 
+def is_audio_abnormal(
+    wav: np.ndarray, sample_rate: int, text: str, max_plausible_words_per_second: float
+) -> bool:
+    word_count = len(text.split())
+    expected_min_duration_s = word_count / max_plausible_words_per_second
+    actual_duration_s = len(wav) / sample_rate
+    return actual_duration_s < expected_min_duration_s
+
+
 class TTSModelService:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings

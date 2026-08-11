@@ -7,8 +7,31 @@ import soundfile as sf
 import torch
 
 from app.config import Settings
-from app.model import TTSModelService, _wav_to_bytes, check_vram
+from app.model import TTSModelService, _wav_to_bytes, check_vram, is_audio_abnormal
 from app.schemas import TTSRequest
+
+
+def test_is_audio_abnormal_detects_truncated_audio():
+    # The reported production case: 35 words compressed into 0.33s.
+    wav = np.zeros(int(0.33 * 24000), dtype="float32")
+    text = " ".join(["word"] * 35)
+    assert is_audio_abnormal(wav, 24000, text, max_plausible_words_per_second=4.5) is True
+
+
+def test_is_audio_abnormal_accepts_plausible_duration():
+    # 35 words at ~2.5 words/sec = 14s, comfortably above the 4.5wps-implied minimum (~7.8s).
+    wav = np.zeros(int(14.0 * 24000), dtype="float32")
+    text = " ".join(["word"] * 35)
+    assert is_audio_abnormal(wav, 24000, text, max_plausible_words_per_second=4.5) is False
+
+
+def test_is_audio_abnormal_boundary_is_not_abnormal():
+    # 9 words / 4.5 wps == exactly 2.0s - equal to the minimum should NOT be flagged.
+    word_count = 9
+    max_wps = 4.5
+    wav = np.zeros(int((word_count / max_wps) * 24000), dtype="float32")
+    text = " ".join(["word"] * word_count)
+    assert is_audio_abnormal(wav, 24000, text, max_plausible_words_per_second=max_wps) is False
 
 
 def test_check_vram_returns_free_gb(monkeypatch):
