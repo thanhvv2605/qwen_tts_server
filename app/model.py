@@ -64,9 +64,10 @@ class TTSModelService:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
         self._model = None
-        # Single-threaded executor usage (all generate calls are serialized
-        # through the batch worker's executor) means these plain ints need
-        # no lock.
+        # Safe without a lock only because BatchWorker's single consumer
+        # awaits one _dispatch at a time, so generate_batch never runs
+        # concurrently with itself. A second concurrent caller would race
+        # these non-atomic increments.
         self.self_check_flagged = 0
         self.self_check_recovered = 0
         self.self_check_exhausted = 0
