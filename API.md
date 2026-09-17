@@ -321,22 +321,27 @@ cần model VoiceDesign. Nếu server đang chạy clone-only, restart tạm v�
 VoiceDesign bật:
 
 ```bash
-# 1. Restart server với cả 2 model (bỏ biến env hoặc =true)
-uvicorn app.main:app --host 0.0.0.0 --port 8000
+# 1. Chạy chế độ đầy đủ có VoiceDesign (script tự kill process chiếm port)
+./scripts/run_full.sh
 
 # 2. Thiết kế audio mẫu bằng instruct (gen vài lần, chọn bản ưng nhất)
-curl -X POST http://127.0.0.1:8000/v1/tts/voice-design \
+curl -X POST http://127.0.0.1:8265/v1/tts/voice-design \
   -H "Content-Type: application/json" \
   -d '{"text": "Câu mẫu dài 8-15 giây...", "language": "English", "instruct": "Mô tả giọng..."}' \
   -o giong_moi.wav
 
 # 3. Đăng ký thành voice_id (ref_text phải khớp đúng text đã đọc ở bước 2)
-curl -X POST http://127.0.0.1:8000/v1/voices \
+curl -X POST http://127.0.0.1:8265/v1/voices \
   -F "name=giong_moi" -F "ref_text=Câu mẫu dài 8-15 giây..." -F "ref_audio=@giong_moi.wav"
 
-# 4. Restart lại về chế độ clone-only tiết kiệm VRAM
-QWEN_TTS_VOICE_DESIGN_ENABLED=false uvicorn app.main:app --host 0.0.0.0 --port 8000
+# 4. Quay về chế độ clone-only tiết kiệm VRAM
+./scripts/run_clone_only.sh
 ```
+
+Hai script launcher (tự kill process đang chiếm port trước khi khởi động):
+`./scripts/run_full.sh [port]` — cả 2 model (dùng khi thiết kế giọng);
+`./scripts/run_clone_only.sh [port]` — chỉ model Base (gen với `voice_id`,
+tiết kiệm ~5GB VRAM). Port mặc định 8265.
 
 Giọng đã đăng ký nằm bền trên đĩa nên chỉ cần thiết kế 1 lần, sau đó
 bật/tắt VoiceDesign hay restart bao nhiêu lần cũng không mất.

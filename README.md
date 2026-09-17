@@ -18,7 +18,14 @@ before.
 
 ## Run
 
-Either of these works; explicit `uvicorn` CLI flags always win over `QWEN_TTS_HOST`/`QWEN_TTS_PORT`:
+Recommended — launcher scripts (auto-kill whatever occupies the port, activate the conda env; default port 8265):
+
+```bash
+./scripts/run_clone_only.sh   # daily use: clone model only (voice_id) — saves ~5GB VRAM
+./scripts/run_full.sh         # both models — only needed to design new voices (instruct)
+```
+
+Or run uvicorn directly; explicit `uvicorn` CLI flags always win over `QWEN_TTS_HOST`/`QWEN_TTS_PORT`:
 
 ```bash
 # CLI flags (ignores QWEN_TTS_HOST / QWEN_TTS_PORT)
