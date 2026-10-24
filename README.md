@@ -1,5 +1,7 @@
 # Qwen3-TTS VoiceDesign Server
 
+[![CI](https://github.com/thanhvv2605/qwen_tts_server/actions/workflows/ci.yml/badge.svg)](https://github.com/thanhvv2605/qwen_tts_server/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 Internal REST API server for `Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign`.
 
 ## Setup
